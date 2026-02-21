@@ -421,5 +421,7 @@ export async function updateWaypointOrder(waypointIds: number[]) {
     .map((value) => Math.trunc(Number(value)))
     .filter((value) => Number.isFinite(value));
 
-  await httpClient.patch('waypoint/order', orderedIds);
+  await httpClient.patch('waypoint/order', {
+    waypoint_ids: orderedIds
+  });
 }

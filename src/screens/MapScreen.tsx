@@ -16,6 +16,7 @@ const WebIFrame = 'iframe' as unknown as React.ComponentType<Record<string, unkn
 type WaypointBadge = {
   waypointId: number;
   order: number;
+  pointType?: string;
   title: string;
   subtitle?: string;
 };
@@ -59,10 +60,13 @@ function buildLeafletMapHtml(
       window.parent.postMessage({ source: 'fastroute-map', ...payload }, '*');
     }
 
-    function createIcon(order) {
+    function createIcon(order, total) {
+      const isStart = order === 1;
+      const isEnd = order === total && total > 1;
+      const bg = isStart ? '#1D8E4A' : (isEnd ? '#CC3D36' : '#2154b3');
       return L.divIcon({
         className: '',
-        html: '<div class="pin">' + order + '</div>',
+        html: '<div class="pin" style="background:' + bg + ';">' + order + '</div>',
         iconSize: [28, 28],
         iconAnchor: [14, 14]
       });
@@ -126,8 +130,12 @@ function buildLeafletMapHtml(
       }
 
       points.forEach((point, index) => {
+        const order = index + 1;
+        const isStart = order === 1;
+        const isEnd = order === points.length && points.length > 1;
+        const pointType = isStart ? 'Início' : (isEnd ? 'Fim' : 'Parada');
         const marker = L.marker([point.latitude, point.longitude], {
-          icon: createIcon(index + 1),
+          icon: createIcon(order, points.length),
           draggable: true,
           autoPan: true
         }).addTo(markersLayer);
@@ -141,14 +149,15 @@ function buildLeafletMapHtml(
           emit({
             type: 'waypoint_dblclick',
             waypointId: point.id,
-            order: index + 1,
+            order,
             title: point.title,
-            subtitle: point.subtitle || ''
+            subtitle: point.subtitle || '',
+            pointType
           });
         });
 
         const subtitle = point.subtitle ? ('<br/>' + point.subtitle) : '';
-        marker.bindTooltip('<b>#' + (index + 1) + ' · ' + point.title + '</b>' + subtitle);
+        marker.bindTooltip('<b>' + pointType + ' #' + order + ' · ' + point.title + '</b>' + subtitle);
       });
 
       emit({ type: 'reorder', order: points.map((point) => point.id) });
@@ -233,6 +242,7 @@ export function MapScreen({ route }: Props) {
       if (payload.type === 'waypoint_dblclick') {
         const waypointId = Number(payload.waypointId);
         const order = Number(payload.order);
+        const pointType = String(payload.pointType ?? '').trim();
         const title = String(payload.title ?? '').trim();
         const subtitle = String(payload.subtitle ?? '').trim();
 
@@ -240,6 +250,7 @@ export function MapScreen({ route }: Props) {
           setBadge({
             waypointId,
             order: Number.isFinite(order) ? order : 0,
+            pointType: pointType || undefined,
             title: title || 'Waypoint',
             subtitle: subtitle || undefined
           });
@@ -359,7 +370,7 @@ export function MapScreen({ route }: Props) {
       {badge ? (
         <View style={styles.badgeCard}>
           <View style={styles.badgeHeader}>
-            <Text style={styles.badgeTitle}>Waypoint #{badge.order}</Text>
+            <Text style={styles.badgeTitle}>{badge.pointType ?? 'Parada'} #{badge.order}</Text>
             <Pressable onPress={() => setBadge(null)}>
               <Text style={styles.badgeClose}>Fechar</Text>
             </Pressable>
@@ -370,7 +381,7 @@ export function MapScreen({ route }: Props) {
       ) : null}
 
       <View style={styles.bottomBar}>
-        <Text style={styles.bottomHint}>Arraste um waypoint sobre outro para reordenar</Text>
+        <Text style={styles.bottomHint}>Número do pin = ordem da rota. Verde = Início, vermelho = Fim.</Text>
         <PrimaryButton
           label="Confirmar ordem"
           onPress={onConfirmOrder}

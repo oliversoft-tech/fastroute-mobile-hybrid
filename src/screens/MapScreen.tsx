@@ -1,14 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  Image,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View
-} from 'react-native';
+import { Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
@@ -21,10 +12,16 @@ import { openGoogleMapsRoute } from '../utils/googleMaps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 const WebIFrame = 'iframe' as unknown as React.ComponentType<Record<string, unknown>>;
-const WebDiv = 'div' as unknown as React.ComponentType<Record<string, unknown>>;
+
+type WaypointBadge = {
+  waypointId: number;
+  order: number;
+  title: string;
+  subtitle?: string;
+};
 
 function buildLeafletMapHtml(
-  points: Array<{ title: string; subtitle: string; latitude: number; longitude: number }>
+  points: Array<{ id: number; title: string; subtitle: string; latitude: number; longitude: number }>
 ) {
   const payload = JSON.stringify(
     points.map((point, index) => ({
@@ -41,7 +38,7 @@ function buildLeafletMapHtml(
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; }
-    .pin-wrap { width: 26px; height: 26px; border-radius: 13px; background: #2154b3; color: #fff; border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font: 700 12px sans-serif; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+    .pin { width: 28px; height: 28px; border-radius: 14px; background: #2154b3; border: 2px solid #fff; color: #fff; display:flex; align-items:center; justify-content:center; font: 700 12px sans-serif; box-shadow: 0 1px 5px rgba(0,0,0,.4); }
   </style>
 </head>
 <body>
@@ -50,32 +47,115 @@ function buildLeafletMapHtml(
   <script>
     const points = ${payload};
     const map = L.map('map', { zoomControl: true, attributionControl: true });
+    const markersLayer = L.layerGroup().addTo(map);
+    let polyline = null;
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
-    const bounds = [];
-    points.forEach((point) => {
-      const icon = L.divIcon({
-        className: '',
-        html: '<div class="pin-wrap">' + point.order + '</div>',
-        iconSize: [26, 26],
-        iconAnchor: [13, 13]
-      });
-      const marker = L.marker([point.latitude, point.longitude], { icon }).addTo(map);
-      const subtitle = point.subtitle ? ('<br/>' + point.subtitle) : '';
-      marker.bindPopup('<b>' + point.title + '</b>' + subtitle);
-      bounds.push([point.latitude, point.longitude]);
-    });
-
-    if (bounds.length === 0) {
-      map.setView([40.211, -8.429], 13);
-    } else if (bounds.length === 1) {
-      map.setView(bounds[0], 15);
-    } else {
-      map.fitBounds(bounds, { padding: [30, 30] });
+    function emit(payload) {
+      window.parent.postMessage({ source: 'fastroute-map', ...payload }, '*');
     }
+
+    function createIcon(order) {
+      return L.divIcon({
+        className: '',
+        html: '<div class="pin">' + order + '</div>',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+    }
+
+    function applyViewport() {
+      const bounds = points.map((point) => [point.latitude, point.longitude]);
+      if (bounds.length === 0) {
+        map.setView([40.211, -8.429], 13);
+        return;
+      }
+      if (bounds.length === 1) {
+        map.setView(bounds[0], 15);
+        return;
+      }
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+
+    function reorder(draggedId, droppedLatLng) {
+      const fromIndex = points.findIndex((point) => point.id === draggedId);
+      if (fromIndex < 0) {
+        return;
+      }
+
+      const droppedPoint = map.latLngToContainerPoint(droppedLatLng);
+      let targetIndex = fromIndex;
+      let minDistance = Infinity;
+
+      points.forEach((point, index) => {
+        if (index === fromIndex) {
+          return;
+        }
+        const markerPoint = map.latLngToContainerPoint([point.latitude, point.longitude]);
+        const distance = droppedPoint.distanceTo(markerPoint);
+        if (distance < minDistance) {
+          minDistance = distance;
+          targetIndex = index;
+        }
+      });
+
+      if (targetIndex !== fromIndex && minDistance <= 90) {
+        const moved = points.splice(fromIndex, 1)[0];
+        points.splice(targetIndex, 0, moved);
+      }
+    }
+
+    function renderMap() {
+      markersLayer.clearLayers();
+
+      if (polyline) {
+        map.removeLayer(polyline);
+        polyline = null;
+      }
+
+      if (points.length > 1) {
+        polyline = L.polyline(points.map((point) => [point.latitude, point.longitude]), {
+          color: '#2154b3',
+          weight: 4,
+          opacity: 0.7
+        }).addTo(map);
+      }
+
+      points.forEach((point, index) => {
+        const marker = L.marker([point.latitude, point.longitude], {
+          icon: createIcon(index + 1),
+          draggable: true,
+          autoPan: true
+        }).addTo(markersLayer);
+
+        marker.on('dragend', (event) => {
+          reorder(point.id, event.target.getLatLng());
+          renderMap();
+        });
+
+        marker.on('dblclick', () => {
+          emit({
+            type: 'waypoint_dblclick',
+            waypointId: point.id,
+            order: index + 1,
+            title: point.title,
+            subtitle: point.subtitle || ''
+          });
+        });
+
+        const subtitle = point.subtitle ? ('<br/>' + point.subtitle) : '';
+        marker.bindTooltip('<b>#' + (index + 1) + ' · ' + point.title + '</b>' + subtitle);
+      });
+
+      emit({ type: 'reorder', order: points.map((point) => point.id) });
+    }
+
+    applyViewport();
+    renderMap();
   </script>
 </body>
 </html>`;
@@ -86,95 +166,128 @@ export function MapScreen({ route }: Props) {
   const [orderedWaypoints, setOrderedWaypoints] = useState<Waypoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [mapLoadError, setMapLoadError] = useState(false);
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [badge, setBadge] = useState<WaypointBadge | null>(null);
 
   useEffect(() => {
     const initial = [...waypoints].sort((a, b) => a.seq_order - b.seq_order);
     setOrderedWaypoints(initial);
   }, [waypoints]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+
+    const browser = globalThis as {
+      addEventListener?: (event: string, handler: (event: unknown) => void) => void;
+      removeEventListener?: (event: string, handler: (event: unknown) => void) => void;
+    };
+
+    const onMessage = (event: unknown) => {
+      const messageEvent = event as { data?: unknown };
+      const raw = messageEvent.data;
+      const payload =
+        typeof raw === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(raw) as Record<string, unknown>;
+              } catch {
+                return null;
+              }
+            })()
+          : (raw as Record<string, unknown> | null);
+
+      if (!payload || payload.source !== 'fastroute-map') {
+        return;
+      }
+
+      if (payload.type === 'reorder' && Array.isArray(payload.order)) {
+        const orderIds = payload.order.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry));
+        setOrderedWaypoints((current) => {
+          if (orderIds.length === 0) {
+            return current;
+          }
+
+          const mapById = new Map(current.map((waypoint) => [waypoint.id, waypoint]));
+          const reordered = orderIds
+            .map((id) => mapById.get(id))
+            .filter((item): item is Waypoint => Boolean(item))
+            .map((waypoint, index) => ({
+              ...waypoint,
+              seq_order: index + 1
+            }));
+
+          if (reordered.length !== current.length) {
+            const missing = current.filter((waypoint) => !orderIds.includes(waypoint.id));
+            const merged = [...reordered, ...missing];
+            return merged.map((waypoint, index) => ({
+              ...waypoint,
+              seq_order: index + 1
+            }));
+          }
+
+          return reordered;
+        });
+      }
+
+      if (payload.type === 'waypoint_dblclick') {
+        const waypointId = Number(payload.waypointId);
+        const order = Number(payload.order);
+        const title = String(payload.title ?? '').trim();
+        const subtitle = String(payload.subtitle ?? '').trim();
+
+        if (Number.isFinite(waypointId)) {
+          setBadge({
+            waypointId,
+            order: Number.isFinite(order) ? order : 0,
+            title: title || 'Waypoint',
+            subtitle: subtitle || undefined
+          });
+        }
+      }
+    };
+
+    browser.addEventListener?.('message', onMessage);
+
+    return () => {
+      browser.removeEventListener?.('message', onMessage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!badge) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setBadge(null);
+    }, 5000);
+
+    return () => clearTimeout(timeout);
+  }, [badge]);
+
   const points = useMemo(
     () =>
-      orderedWaypoints.map((waypoint) => ({
-        waypoint,
-        meta: getWaypointMeta(waypoint)
-      })),
-    [orderedWaypoints]
-  );
-
-  const nativeMapUrl = useMemo(() => {
-    const initial = points[0]?.meta ?? { latitude: 40.211, longitude: -8.429 };
-    const markers = points
-      .map(({ meta }) => `${meta.latitude},${meta.longitude},lightblue1`)
-      .join('|');
-    return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
-  }, [points]);
-
-  const webMapHtml = useMemo(
-    () =>
-      buildLeafletMapHtml(
-        points.map(({ meta }) => ({
+      orderedWaypoints.map((waypoint) => {
+        const meta = getWaypointMeta(waypoint);
+        return {
+          id: waypoint.id,
           title: meta.title,
           subtitle: meta.subtitle,
           latitude: meta.latitude,
           longitude: meta.longitude
-        }))
-      ),
-    [points]
+        };
+      }),
+    [orderedWaypoints]
   );
 
-  const reorderAt = (fromIndex: number, toIndex: number) => {
-    setOrderedWaypoints((current) => {
-      if (
-        fromIndex === toIndex ||
-        fromIndex < 0 ||
-        toIndex < 0 ||
-        fromIndex >= current.length ||
-        toIndex >= current.length
-      ) {
-        return current;
-      }
+  const webMapHtml = useMemo(() => buildLeafletMapHtml(points), [points]);
 
-      const next = [...current];
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, moved);
-      return next.map((waypoint, index) => ({
-        ...waypoint,
-        seq_order: index + 1
-      }));
-    });
-  };
-
-  const onNativeMove = (currentIndex: number, direction: -1 | 1) => {
-    const targetIndex = currentIndex + direction;
-    reorderAt(currentIndex, targetIndex);
-  };
-
-  const onWebDragStart = (index: number) => (event: unknown) => {
-    setDraggingIndex(index);
-    const dragEvent = event as { dataTransfer?: { setData: (type: string, value: string) => void } };
-    dragEvent.dataTransfer?.setData('text/plain', String(index));
-  };
-
-  const onWebDragOver = (event: unknown) => {
-    const dragEvent = event as { preventDefault?: () => void };
-    dragEvent.preventDefault?.();
-  };
-
-  const onWebDrop = (targetIndex: number) => (event: unknown) => {
-    const dragEvent = event as {
-      preventDefault?: () => void;
-      dataTransfer?: { getData: (type: string) => string };
-    };
-    dragEvent.preventDefault?.();
-    const sourceFromState = draggingIndex;
-    const sourceFromTransfer = Number(dragEvent.dataTransfer?.getData('text/plain'));
-    const sourceIndex = Number.isInteger(sourceFromState ?? NaN)
-      ? (sourceFromState as number)
-      : sourceFromTransfer;
-    reorderAt(sourceIndex, targetIndex);
-    setDraggingIndex(null);
-  };
+  const nativeMapUrl = useMemo(() => {
+    const initial = points[0] ?? { latitude: 40.211, longitude: -8.429 };
+    const markers = points.map((point) => `${point.latitude},${point.longitude},lightblue1`).join('|');
+    return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
+  }, [points]);
 
   const openDirections = async () => {
     if (orderedWaypoints.length === 0) {
@@ -239,139 +352,35 @@ export function MapScreen({ route }: Props) {
         {Platform.OS !== 'web' && mapLoadError ? (
           <View style={styles.mapFallbackOverlay}>
             <Text style={styles.mapFallbackText}>Mapa indisponível neste dispositivo.</Text>
-            <PrimaryButton
-              label="Abrir rota no Google Maps"
-              onPress={() => {
-                void openDirections();
-              }}
-              style={styles.fallbackButton}
-            />
           </View>
         ) : null}
       </View>
 
-      <View style={styles.overlayPanel}>
-        <View style={styles.overlayHandle} />
-        <Text style={styles.overlayTitle}>Paradas da rota</Text>
-        <Text style={styles.overlayHint}>Arraste e solte para reordenar</Text>
+      {badge ? (
+        <View style={styles.badgeCard}>
+          <View style={styles.badgeHeader}>
+            <Text style={styles.badgeTitle}>Waypoint #{badge.order}</Text>
+            <Pressable onPress={() => setBadge(null)}>
+              <Text style={styles.badgeClose}>Fechar</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.badgeMain}>{badge.title}</Text>
+          {badge.subtitle ? <Text style={styles.badgeSub}>{badge.subtitle}</Text> : null}
+        </View>
+      ) : null}
 
-        {Platform.OS === 'web' ? (
-          <WebDiv style={webStyles.list}>
-            {points.map(({ waypoint, meta }, index) => (
-              <WebDiv
-                key={waypoint.id}
-                draggable={!loading}
-                onDragStart={onWebDragStart(index)}
-                onDragOver={onWebDragOver}
-                onDrop={onWebDrop(index)}
-                style={{
-                  ...webStyles.row,
-                  ...(draggingIndex === index ? webStyles.rowDragging : {})
-                }}
-              >
-                <WebDiv style={webStyles.badge}>{index + 1}</WebDiv>
-                <WebDiv style={webStyles.texts}>
-                  <WebDiv style={webStyles.title}>{meta.title}</WebDiv>
-                  {meta.subtitle ? <WebDiv style={webStyles.subtitle}>{meta.subtitle}</WebDiv> : null}
-                </WebDiv>
-              </WebDiv>
-            ))}
-          </WebDiv>
-        ) : (
-          <ScrollView style={styles.nativeList} contentContainerStyle={styles.nativeListContent}>
-            {points.map(({ waypoint, meta }, index) => (
-              <View key={waypoint.id} style={styles.stopRow}>
-                <View style={styles.stopTextColumn}>
-                  <Text style={styles.stopTitle}>#{index + 1} • {meta.title}</Text>
-                  {meta.subtitle ? <Text style={styles.stopSub}>{meta.subtitle}</Text> : null}
-                </View>
-                <View style={styles.controls}>
-                  <Pressable
-                    style={[styles.controlButton, index === 0 && styles.controlButtonDisabled]}
-                    disabled={index === 0 || loading}
-                    onPress={() => onNativeMove(index, -1)}
-                  >
-                    <Text style={styles.controlText}>↑</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      styles.controlButton,
-                      index === points.length - 1 && styles.controlButtonDisabled
-                    ]}
-                    disabled={index === points.length - 1 || loading}
-                    onPress={() => onNativeMove(index, 1)}
-                  >
-                    <Text style={styles.controlText}>↓</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        )}
-
+      <View style={styles.bottomBar}>
+        <Text style={styles.bottomHint}>Arraste um waypoint sobre outro para reordenar</Text>
         <PrimaryButton
           label="Confirmar ordem"
           onPress={onConfirmOrder}
           loading={loading}
           disabled={orderedWaypoints.length === 0}
-          style={styles.confirmButton}
         />
       </View>
     </View>
   );
 }
-
-const webStyles = {
-  list: {
-    maxHeight: '40vh',
-    overflowY: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px'
-  },
-  row: {
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: '10px',
-    border: `1px solid ${colors.border}`,
-    borderRadius: '10px',
-    padding: '10px',
-    background: '#fff',
-    cursor: 'grab'
-  },
-  rowDragging: {
-    opacity: 0.45
-  },
-  badge: {
-    width: '24px',
-    height: '24px',
-    borderRadius: '999px',
-    background: colors.primary,
-    color: '#fff',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontWeight: 800,
-    fontSize: '11px',
-    flexShrink: 0
-  },
-  texts: {
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: 0
-  },
-  title: {
-    color: colors.textPrimary,
-    fontWeight: 700,
-    fontSize: '14px'
-  },
-  subtitle: {
-    color: colors.textSecondary,
-    fontSize: '12px',
-    marginTop: '2px'
-  }
-} as const;
 
 const styles = StyleSheet.create({
   screen: {
@@ -406,90 +415,56 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700'
   },
-  fallbackButton: {
-    marginTop: 12
-  },
-  overlayPanel: {
-    marginTop: 'auto',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+  badgeCard: {
+    position: 'absolute',
+    top: 14,
+    left: 14,
+    right: 14,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 16,
-    gap: 8,
-    maxHeight: '58%'
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    padding: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 }
   },
-  overlayHandle: {
-    width: 42,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#CBD5E9',
-    alignSelf: 'center'
-  },
-  overlayTitle: {
-    color: colors.textPrimary,
-    fontWeight: '800',
-    fontSize: 15
-  },
-  overlayHint: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    marginBottom: 2
-  },
-  nativeList: {
-    maxHeight: 250
-  },
-  nativeListContent: {
-    gap: 8,
-    paddingBottom: 4
-  },
-  stopRow: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    padding: 10,
+  badgeHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#fff'
+    justifyContent: 'space-between'
   },
-  stopTextColumn: {
-    flex: 1
-  },
-  stopTitle: {
-    color: colors.textPrimary,
-    fontWeight: '700'
-  },
-  stopSub: {
+  badgeTitle: {
     color: colors.textSecondary,
-    fontSize: 12,
-    marginTop: 2
+    fontWeight: '700',
+    fontSize: 12
   },
-  controls: {
-    gap: 6
+  badgeClose: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 12
   },
-  controlButton: {
-    width: 34,
-    height: 28,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff'
-  },
-  controlButtonDisabled: {
-    opacity: 0.45
-  },
-  controlText: {
+  badgeMain: {
     color: colors.textPrimary,
     fontWeight: '800',
-    fontSize: 14
+    fontSize: 16,
+    marginTop: 6
   },
-  confirmButton: {
-    marginTop: 2
+  badgeSub: {
+    color: colors.textSecondary,
+    marginTop: 4
+  },
+  bottomBar: {
+    marginTop: 'auto',
+    padding: 12,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderTopWidth: 1,
+    borderTopColor: colors.border
+  },
+  bottomHint: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginBottom: 8
   }
 });

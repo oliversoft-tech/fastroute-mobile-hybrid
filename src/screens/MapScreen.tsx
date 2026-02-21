@@ -17,6 +17,7 @@ type WaypointBadge = {
   waypointId: number;
   order: number;
   pointType?: string;
+  wasReordered?: boolean;
   title: string;
   subtitle?: string;
 };
@@ -47,9 +48,9 @@ function buildLeafletMapHtml(
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const points = ${payload};
+    const originalOrder = new Map(points.map((point, index) => [point.id, index + 1]));
     const map = L.map('map', { zoomControl: true, attributionControl: true });
     const markersLayer = L.layerGroup().addTo(map);
-    let polyline = null;
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
@@ -60,10 +61,11 @@ function buildLeafletMapHtml(
       window.parent.postMessage({ source: 'fastroute-map', ...payload }, '*');
     }
 
-    function createIcon(order, total) {
+    function createIcon(point, order, total) {
+      const wasReordered = originalOrder.get(point.id) !== order;
       const isStart = order === 1;
       const isEnd = order === total && total > 1;
-      const bg = isStart ? '#1D8E4A' : (isEnd ? '#CC3D36' : '#2154b3');
+      const bg = wasReordered ? '#F59E0B' : (isStart ? '#1D8E4A' : (isEnd ? '#CC3D36' : '#2154b3'));
       return L.divIcon({
         className: '',
         html: '<div class="pin" style="background:' + bg + ';">' + order + '</div>',
@@ -116,26 +118,14 @@ function buildLeafletMapHtml(
     function renderMap() {
       markersLayer.clearLayers();
 
-      if (polyline) {
-        map.removeLayer(polyline);
-        polyline = null;
-      }
-
-      if (points.length > 1) {
-        polyline = L.polyline(points.map((point) => [point.latitude, point.longitude]), {
-          color: '#2154b3',
-          weight: 4,
-          opacity: 0.7
-        }).addTo(map);
-      }
-
       points.forEach((point, index) => {
         const order = index + 1;
+        const wasReordered = originalOrder.get(point.id) !== order;
         const isStart = order === 1;
         const isEnd = order === points.length && points.length > 1;
         const pointType = isStart ? 'Início' : (isEnd ? 'Fim' : 'Parada');
         const marker = L.marker([point.latitude, point.longitude], {
-          icon: createIcon(order, points.length),
+          icon: createIcon(point, order, points.length),
           draggable: true,
           autoPan: true
         }).addTo(markersLayer);
@@ -152,7 +142,8 @@ function buildLeafletMapHtml(
             order,
             title: point.title,
             subtitle: point.subtitle || '',
-            pointType
+            pointType,
+            wasReordered
           });
         });
 
@@ -176,11 +167,11 @@ export function MapScreen({ route }: Props) {
   const [loading, setLoading] = useState(false);
   const [mapLoadError, setMapLoadError] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
+  const initialWaypoints = useMemo(() => [...waypoints].sort((a, b) => a.seq_order - b.seq_order), [waypoints]);
 
   useEffect(() => {
-    const initial = [...waypoints].sort((a, b) => a.seq_order - b.seq_order);
-    setOrderedWaypoints(initial);
-  }, [waypoints]);
+    setOrderedWaypoints(initialWaypoints);
+  }, [initialWaypoints]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -243,6 +234,7 @@ export function MapScreen({ route }: Props) {
         const waypointId = Number(payload.waypointId);
         const order = Number(payload.order);
         const pointType = String(payload.pointType ?? '').trim();
+        const wasReordered = Boolean(payload.wasReordered);
         const title = String(payload.title ?? '').trim();
         const subtitle = String(payload.subtitle ?? '').trim();
 
@@ -251,6 +243,7 @@ export function MapScreen({ route }: Props) {
             waypointId,
             order: Number.isFinite(order) ? order : 0,
             pointType: pointType || undefined,
+            wasReordered,
             title: title || 'Waypoint',
             subtitle: subtitle || undefined
           });
@@ -277,6 +270,21 @@ export function MapScreen({ route }: Props) {
     return () => clearTimeout(timeout);
   }, [badge]);
 
+  const initialPoints = useMemo(
+    () =>
+      initialWaypoints.map((waypoint) => {
+        const meta = getWaypointMeta(waypoint);
+        return {
+          id: waypoint.id,
+          title: meta.title,
+          subtitle: meta.subtitle,
+          latitude: meta.latitude,
+          longitude: meta.longitude
+        };
+      }),
+    [initialWaypoints]
+  );
+
   const points = useMemo(
     () =>
       orderedWaypoints.map((waypoint) => {
@@ -292,7 +300,7 @@ export function MapScreen({ route }: Props) {
     [orderedWaypoints]
   );
 
-  const webMapHtml = useMemo(() => buildLeafletMapHtml(points), [points]);
+  const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
 
   const nativeMapUrl = useMemo(() => {
     const initial = points[0] ?? { latitude: 40.211, longitude: -8.429 };
@@ -377,11 +385,14 @@ export function MapScreen({ route }: Props) {
           </View>
           <Text style={styles.badgeMain}>{badge.title}</Text>
           {badge.subtitle ? <Text style={styles.badgeSub}>{badge.subtitle}</Text> : null}
+          {badge.wasReordered ? <Text style={styles.badgeChanged}>Waypoint reordenado</Text> : null}
         </View>
       ) : null}
 
       <View style={styles.bottomBar}>
-        <Text style={styles.bottomHint}>Número do pin = ordem da rota. Verde = Início, vermelho = Fim.</Text>
+        <Text style={styles.bottomHint}>
+          Número do pin = ordem da rota. Verde = Início, vermelho = Fim, laranja = reordenado.
+        </Text>
         <PrimaryButton
           label="Confirmar ordem"
           onPress={onConfirmOrder}
@@ -465,6 +476,12 @@ const styles = StyleSheet.create({
   badgeSub: {
     color: colors.textSecondary,
     marginTop: 4
+  },
+  badgeChanged: {
+    color: '#B66900',
+    fontWeight: '700',
+    marginTop: 6,
+    fontSize: 12
   },
   bottomBar: {
     marginTop: 'auto',

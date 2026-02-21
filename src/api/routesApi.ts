@@ -88,9 +88,30 @@ function extractCollection(data: unknown) {
   const resolved = tryParseJson(data);
 
   if (Array.isArray(resolved)) {
-    return resolved
-      .map((entry) => tryParseJson(entry))
-      .filter((entry): entry is ApiObject => Boolean(entry && typeof entry === 'object'));
+    const flattened: ApiObject[] = [];
+
+    for (const entry of resolved) {
+      const parsedEntry = tryParseJson(entry);
+      if (!parsedEntry || typeof parsedEntry !== 'object') {
+        continue;
+      }
+
+      const objectEntry = parsedEntry as ApiObject;
+      const nestedRoutes = tryParseJson(objectEntry.routes);
+      if (Array.isArray(nestedRoutes)) {
+        for (const nestedRoute of nestedRoutes) {
+          const parsedRoute = tryParseJson(nestedRoute);
+          if (parsedRoute && typeof parsedRoute === 'object') {
+            flattened.push(parsedRoute as ApiObject);
+          }
+        }
+        continue;
+      }
+
+      flattened.push(objectEntry);
+    }
+
+    return flattened;
   }
 
   if (!resolved || typeof resolved !== 'object') {
@@ -163,7 +184,12 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
       resolved.latitude ?? resolved.lat ?? resolved.geo_lat ?? resolved.latlng_lat ?? address.latitude
     ),
     longitude: toNumber(
-      resolved.longitude ?? resolved.lng ?? resolved.lon ?? resolved.geo_lng ?? address.longitude
+      resolved.longitude ??
+        resolved.long ??
+        resolved.lng ??
+        resolved.lon ??
+        resolved.geo_lng ??
+        address.longitude
     )
   };
 }

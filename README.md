@@ -5,13 +5,13 @@ App React Native com Expo, inspirado nas telas do prototipo, para operacao de ro
 ## Funcionalidades implementadas
 
 - Login via `POST /login`
-- Lista de rotas (`GET /routes`)
-- Clusterizacao de enderecos (`POST /clusterize`)
-- Criacao manual de rota por cluster (`POST /routes`)
+- Lista de rotas (`GET /route`)
 - Importacao de pedidos por arquivo (`POST /route/import`)
-- Detalhes da rota com waypoints (`GET /routes/{id}`)
-- Listagem dedicada de waypoints (`GET /routes/{id}/waypoints`)
-- Atualizacao de status da entrega (`PATCH /routes/{id}/waypoints`)
+- Tela de arquivos locais e historico de importacoes (visual do prototipo)
+- Detalhes de rota (`GET /route?route_id=...`)
+- Iniciar rota (`PATCH /route/start?route_id=...`)
+- Finalizar rota (`PATCH /route/finish?route_id=...`)
+- Finalizar waypoint (`PATCH /waypoint/finish`)
 - Visualizacao da rota no mapa
 - Abrir parada no Google Maps
 
@@ -49,5 +49,5 @@ Refresh de token via Supabase SDK:
 
 ## Observacoes
 
-- O contrato OpenAPI nao traz coordenadas de endereco nos waypoints. Por isso o app usa um mapeamento local para demonstracao no mapa quando necessario.
-- O status "FALHA" do prototipo foi tratado como retorno para `PENDENTE`, pois no YAML os status aceitos sao `PENDENTE`, `EM_ROTA` e `CONCLUIDO`.
+- O contrato usado pelo app segue a collection Postman `FastRouteApp.postman_collection.json`.
+- O app normaliza diferentes formatos de payload da API para manter a UI consistente.

@@ -22,6 +22,13 @@ export function ImportRouteScreen({ navigation }: Props) {
   const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [recentFiles, setRecentFiles] = useState<
+    Array<{ name: string; sizeKb: number; type: string }>
+  >([
+    { name: 'rota_norte_v2.csv', sizeKb: 2410, type: 'CSV' },
+    { name: 'export_centro_log.json', sizeKb: 659, type: 'JSON' },
+    { name: 'rota_sul_backup.csv', sizeKb: 1230, type: 'CSV' }
+  ]);
 
   const pickFile = async () => {
     const response = await DocumentPicker.getDocumentAsync({
@@ -35,8 +42,21 @@ export function ImportRouteScreen({ navigation }: Props) {
     });
 
     if (!response.canceled && response.assets.length > 0) {
-      setSelectedFile(response.assets[0]);
+      const file = response.assets[0];
+      setSelectedFile(file);
       setResult(null);
+      setRecentFiles((prev) => [
+        {
+          name: file.name,
+          sizeKb: Math.round((file.size ?? 0) / 1024),
+          type: file.mimeType?.includes('json')
+            ? 'JSON'
+            : file.mimeType?.includes('sheet') || file.mimeType?.includes('excel')
+              ? 'XLSX'
+              : 'CSV'
+        },
+        ...prev.filter((entry) => entry.name !== file.name)
+      ].slice(0, 5));
     }
   };
 
@@ -75,6 +95,10 @@ export function ImportRouteScreen({ navigation }: Props) {
           <Text style={styles.dropzoneSub}>XLSX ou CSV</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.linkInline} onPress={() => navigation.navigate('FileBrowser')}>
+          <Text style={styles.linkInlineText}>Abrir arquivos locais</Text>
+        </TouchableOpacity>
+
         {selectedFile ? (
           <View style={styles.fileCard}>
             <Text style={styles.fileName}>{selectedFile.name}</Text>
@@ -95,6 +119,37 @@ export function ImportRouteScreen({ navigation }: Props) {
           onPress={() => navigation.goBack()}
           style={styles.secondaryButton}
         />
+      </View>
+
+      <View style={styles.resultCard}>
+        <View style={styles.recentHeader}>
+          <Text style={styles.resultTitle}>Arquivos Recentes</Text>
+          <TouchableOpacity onPress={() => setRecentFiles([])}>
+            <Text style={styles.clearText}>Limpar histórico</Text>
+          </TouchableOpacity>
+        </View>
+        {recentFiles.length === 0 ? (
+          <Text style={styles.resultItem}>Nenhum arquivo recente.</Text>
+        ) : (
+          recentFiles.map((file) => (
+            <TouchableOpacity
+              key={file.name}
+              style={styles.recentRow}
+              onPress={() => {
+                Alert.alert('Arquivo selecionado', file.name);
+              }}
+            >
+              <View style={styles.recentIconWrap}>
+                <Text style={styles.recentIcon}>{file.type.slice(0, 1)}</Text>
+              </View>
+              <View style={styles.recentTextCol}>
+                <Text style={styles.fileName}>{file.name}</Text>
+                <Text style={styles.fileMeta}>{file.sizeKb} KB</Text>
+              </View>
+              <Text style={styles.recentArrow}>›</Text>
+            </TouchableOpacity>
+          ))
+        )}
       </View>
 
       {result ? (
@@ -149,6 +204,14 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 4
   },
+  linkInline: {
+    alignSelf: 'flex-start'
+  },
+  linkInlineText: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 12
+  },
   fileCard: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -175,10 +238,50 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: 14
   },
+  recentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8
+  },
   resultTitle: {
     color: colors.textPrimary,
     fontWeight: '700',
     marginBottom: 6
+  },
+  clearText: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 12
+  },
+  recentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border
+  },
+  recentIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFF4FF'
+  },
+  recentIcon: {
+    color: colors.primary,
+    fontWeight: '800',
+    fontSize: 11
+  },
+  recentTextCol: {
+    marginLeft: 10,
+    flex: 1
+  },
+  recentArrow: {
+    color: colors.textSecondary,
+    fontSize: 18,
+    lineHeight: 18
   },
   resultItem: {
     color: colors.textSecondary,

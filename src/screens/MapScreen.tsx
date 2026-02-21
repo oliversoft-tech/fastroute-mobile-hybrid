@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
@@ -19,12 +19,17 @@ export function MapScreen({ route }: Props) {
     [waypoints]
   );
 
+  const mapUrl = useMemo(() => {
+    const initial = points[0]?.meta ?? { latitude: 40.211, longitude: -8.429 };
+    const markers = points
+      .map(({ meta }) => `${meta.latitude},${meta.longitude},lightblue1`)
+      .join('|');
+    return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
+  }, [points]);
+
   return (
     <View style={styles.container}>
-      <View style={[styles.map, styles.webFallback]}>
-        <Text style={styles.webFallbackTitle}>Preview de mapa indisponivel no Web</Text>
-        <Text style={styles.webFallbackSub}>Abra no Android/iOS para visualizar o mapa nativo.</Text>
-      </View>
+      <Image source={{ uri: mapUrl }} style={styles.map} resizeMode="cover" />
 
       <View style={styles.legend}>
         <Text style={styles.legendTitle}>Paradas da rota</Text>
@@ -48,24 +53,10 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
     borderRadius: 14,
-    overflow: 'hidden'
-  },
-  webFallback: {
-    backgroundColor: colors.card,
+    overflow: 'hidden',
     borderWidth: 1,
     borderColor: colors.border,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 16
-  },
-  webFallbackTitle: {
-    color: colors.textPrimary,
-    fontWeight: '700'
-  },
-  webFallbackSub: {
-    color: colors.textSecondary,
-    marginTop: 6,
-    textAlign: 'center'
+    backgroundColor: '#dde8ff'
   },
   legend: {
     borderRadius: 12,

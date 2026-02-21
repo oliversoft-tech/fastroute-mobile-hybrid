@@ -68,12 +68,26 @@ export function RoutesScreen({ navigation }: Props) {
           <Text style={styles.headerTitle}>Minhas Rotas</Text>
           <Text style={styles.headerSubtitle}>Import {routeStats.total} • {routeStats.pending} pendentes</Text>
         </View>
-        <TouchableOpacity onPress={() => void logout()}>
-          <Text style={styles.logout}>Sair</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={styles.updateButton} onPress={loadRoutes}>
+            <Text style={styles.updateButtonText}>Atualizar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => void logout()}>
+            <Text style={styles.logout}>Sair</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <Text style={styles.driver}>Motorista: {userEmail}</Text>
+
+      <View style={styles.badgesRow}>
+        <View style={styles.badgePill}>
+          <Text style={styles.badgePillText}>Motorista Demo</Text>
+        </View>
+        <View style={styles.badgePill}>
+          <Text style={styles.badgePillText}>OliverSoft - Coimbra</Text>
+        </View>
+      </View>
 
       <View style={styles.statsCard}>
         <Text style={styles.statsTitle}>Hoje</Text>
@@ -85,24 +99,6 @@ export function RoutesScreen({ navigation }: Props) {
       <View style={styles.createCard}>
         <Text style={styles.createTitle}>Criar rota por importação</Text>
         <PrimaryButton label="Criar Rota" onPress={() => navigation.navigate('ImportRoute')} />
-      </View>
-
-      <View style={styles.createCard}>
-        <Text style={styles.createTitle}>Operações avançadas</Text>
-        <View style={styles.inlineButtons}>
-          <PrimaryButton
-            label="Clusterização"
-            variant="neutral"
-            onPress={() => navigation.navigate('Clusterize')}
-            style={styles.flexButton}
-          />
-          <PrimaryButton
-            label="Criar Manual"
-            variant="primary"
-            onPress={() => navigation.navigate('CreateRouteManual')}
-            style={styles.flexButton}
-          />
-        </View>
       </View>
 
       {loading ? (
@@ -167,10 +163,45 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: '700'
   },
+  headerActions: {
+    alignItems: 'flex-end',
+    gap: 8
+  },
+  updateButton: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#fff'
+  },
+  updateButtonText: {
+    color: colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 12
+  },
   driver: {
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '600'
+  },
+  badgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  badgePill: {
+    borderWidth: 1,
+    borderColor: '#D0DAEE',
+    backgroundColor: '#F1F6FF',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5
+  },
+  badgePillText: {
+    color: colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '700'
   },
   statsCard: {
     borderRadius: 14,
@@ -200,13 +231,6 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '700',
     marginBottom: 2
-  },
-  inlineButtons: {
-    flexDirection: 'row',
-    gap: 10
-  },
-  flexButton: {
-    flex: 1
   },
   loaderContainer: {
     paddingVertical: 24,

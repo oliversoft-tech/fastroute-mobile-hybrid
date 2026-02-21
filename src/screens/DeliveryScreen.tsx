@@ -31,6 +31,20 @@ export function DeliveryScreen({ route, navigation }: Props) {
     }
   };
 
+  const onFailDelivery = async () => {
+    try {
+      setLoading(true);
+      await updateWaypointStatus(routeId, waypoint.id, 'PENDENTE');
+      setCurrentStatus('PENDENTE');
+      Alert.alert('Falha registrada', 'Entrega marcada como falha.');
+    } catch {
+      setCurrentStatus('PENDENTE');
+      Alert.alert('Falha simulada', 'Falha registrada localmente (simulado).');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const openInMaps = async () => {
     const url = `https://www.google.com/maps/search/?api=1&query=${meta.latitude},${meta.longitude}`;
     const supported = await Linking.canOpenURL(url);
@@ -61,6 +75,13 @@ export function DeliveryScreen({ route, navigation }: Props) {
         />
 
         <PrimaryButton
+          label="Tirar foto (simulado)"
+          variant="neutral"
+          onPress={() => Alert.alert('Simulado', 'Captura de foto simulada.')}
+          style={styles.button}
+        />
+
+        <PrimaryButton
           label="Marcar como ENTREGUE"
           variant="success"
           onPress={() => setStatus('CONCLUIDO')}
@@ -69,9 +90,9 @@ export function DeliveryScreen({ route, navigation }: Props) {
         />
 
         <PrimaryButton
-          label="Marcar FALHA (volta para pendente)"
+          label="Marcar FALHA"
           variant="danger"
-          onPress={() => setStatus('PENDENTE')}
+          onPress={onFailDelivery}
           loading={loading}
           style={styles.button}
         />

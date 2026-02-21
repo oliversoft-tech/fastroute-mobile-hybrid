@@ -13,7 +13,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
-import { getRouteDetails, listRouteWaypoints, updateWaypointStatus } from '../api/routesApi';
+import {
+  finishRoute,
+  getRouteDetails,
+  listRouteWaypoints,
+  startRoute
+} from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 import { RouteDetail, Waypoint } from '../api/types';
 import { StatusBadge } from '../components/StatusBadge';
@@ -59,22 +64,16 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const waypoints = routeDetail?.waypoints ?? [];
 
   const canFinalize = useMemo(
-    () => waypoints.length > 0 && waypoints.every((waypoint) => waypoint.status === 'CONCLUIDO'),
+    () => waypoints.length === 0 || waypoints.every((waypoint) => waypoint.status === 'CONCLUIDO'),
     [waypoints]
   );
 
   const onStartRoute = async () => {
-    const nextWaypoint = waypoints.find((waypoint) => waypoint.status === 'PENDENTE');
-
-    if (!nextWaypoint) {
-      Alert.alert('Rota pronta', 'Não existem paradas pendentes para iniciar.');
-      return;
-    }
-
     try {
       setSaving(true);
-      await updateWaypointStatus(routeId, nextWaypoint.id, 'EM_ROTA');
+      await startRoute(routeId);
       await loadRouteDetails();
+      Alert.alert('Rota iniciada', `Rota #${routeId} iniciada com sucesso.`);
     } catch (error) {
       Alert.alert('Erro ao iniciar rota', getApiError(error));
     } finally {
@@ -82,14 +81,17 @@ export function RouteDetailScreen({ route, navigation }: Props) {
     }
   };
 
-  const onFinalize = () => {
-    if (!canFinalize) {
-      Alert.alert('Rota incompleta', 'Conclua todas as entregas antes de finalizar.');
-      return;
+  const onFinalize = async () => {
+    try {
+      setSaving(true);
+      await finishRoute(routeId);
+      Alert.alert('Finalização enviada', `Solicitação de finalização da rota #${routeId} enviada.`);
+      navigation.goBack();
+    } catch (error) {
+      Alert.alert('Erro ao finalizar rota', getApiError(error));
+    } finally {
+      setSaving(false);
     }
-
-    Alert.alert('Rota concluída', 'Todas as paradas estão entregues.');
-    navigation.goBack();
   };
 
   const onWaypointPress = (waypoint: Waypoint) => {
@@ -175,7 +177,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
             label="Finalizar rota"
             variant={canFinalize ? 'success' : 'danger'}
             onPress={onFinalize}
-            disabled={!waypoints.length}
+            loading={saving}
             style={styles.finalButton}
           />
         </>

@@ -14,6 +14,10 @@ export interface Waypoint {
   address_id: number;
   seq_order: number;
   status: WaypointStatus;
+  title?: string;
+  subtitle?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface RouteDetail extends Route {
@@ -24,6 +28,8 @@ export interface ImportResult {
   orders_created: number;
   addresses_created: number;
   routes_generated: number;
+  route_ids?: number[];
+  route_id?: number;
 }
 
 export interface ClusterResult {

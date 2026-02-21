@@ -16,7 +16,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const { routeId, waypoint } = route.params;
   const [currentStatus, setCurrentStatus] = useState(waypoint.status);
   const [loading, setLoading] = useState(false);
-  const meta = getWaypointMeta(waypoint.address_id, waypoint.id);
+  const meta = getWaypointMeta(waypoint);
 
   const setStatus = async (status: WaypointStatus) => {
     try {

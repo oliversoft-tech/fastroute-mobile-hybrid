@@ -15,6 +15,7 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { importOrders } from '../api/ordersApi';
 import { getApiError } from '../api/httpClient';
 import { ImportResult } from '../api/types';
+import { getRouteDetails, listRouteWaypoints, listRoutes } from '../api/routesApi';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -60,6 +61,33 @@ export function ImportRouteScreen({ navigation }: Props) {
     }
   };
 
+  const resolveCreatedRouteId = async (payload: ImportResult) => {
+    if (payload.route_id) {
+      return payload.route_id;
+    }
+
+    if (payload.route_ids && payload.route_ids.length > 0) {
+      return payload.route_ids[0];
+    }
+
+    const routes = await listRoutes();
+    if (routes.length === 0) {
+      return null;
+    }
+
+    const sortedRoutes = [...routes].sort((a, b) => {
+      const dateA = Date.parse(a.created_at);
+      const dateB = Date.parse(b.created_at);
+      if (Number.isFinite(dateA) && Number.isFinite(dateB) && dateA !== dateB) {
+        return dateB - dateA;
+      }
+
+      return b.id - a.id;
+    });
+
+    return sortedRoutes[0].id;
+  };
+
   const onImport = async () => {
     if (!selectedFile) {
       Alert.alert('Arquivo obrigatório', 'Selecione um arquivo XLSX ou CSV para continuar.');
@@ -75,8 +103,31 @@ export function ImportRouteScreen({ navigation }: Props) {
         webFile: (selectedFile as DocumentPicker.DocumentPickerAsset & { file?: Blob }).file
       });
       setResult(payload);
-      Alert.alert('Importação concluída', 'Pedidos importados com sucesso.');
-      navigation.goBack();
+
+      const routeId = await resolveCreatedRouteId(payload);
+      if (!routeId) {
+        Alert.alert('Importação concluída', 'Pedidos importados com sucesso.');
+        navigation.goBack();
+        return;
+      }
+
+      const detail = await getRouteDetails(routeId);
+      const waypoints =
+        detail.waypoints && detail.waypoints.length > 0
+          ? detail.waypoints
+          : await listRouteWaypoints(routeId);
+
+      if (waypoints.length === 0) {
+        Alert.alert('Importação concluída', 'Rota criada, mas sem waypoints para reordenação.');
+        navigation.replace('RouteDetail', { routeId });
+        return;
+      }
+
+      Alert.alert('Importação concluída', 'Rota criada. Reordene os waypoints para iniciar.');
+      navigation.replace('Map', {
+        routeId,
+        waypoints
+      });
     } catch (error) {
       Alert.alert('Erro na importação', getApiError(error));
     } finally {

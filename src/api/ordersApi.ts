@@ -24,10 +24,22 @@ export async function importOrders(file: LocalFile) {
   const { data } = await httpClient.post<ImportResult | string | null>('route/import', formData);
 
   if (typeof data === 'object' && data !== null) {
+    const payload = data as ImportResult & {
+      routeId?: unknown;
+      id?: unknown;
+      route_ids?: unknown[];
+    };
+    const parsedRouteIds = Array.isArray(payload.route_ids)
+      ? payload.route_ids.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry))
+      : [];
+    const parsedRouteId = Number(payload.route_id ?? payload.routeId ?? payload.id);
+
     return {
-      orders_created: data.orders_created ?? 0,
-      addresses_created: data.addresses_created ?? 0,
-      routes_generated: data.routes_generated ?? 0
+      orders_created: payload.orders_created ?? 0,
+      addresses_created: payload.addresses_created ?? 0,
+      routes_generated: payload.routes_generated ?? 0,
+      route_ids: parsedRouteIds.length > 0 ? parsedRouteIds : undefined,
+      route_id: Number.isFinite(parsedRouteId) ? parsedRouteId : undefined
     };
   }
 

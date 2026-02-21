@@ -151,7 +151,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
           <Text style={styles.sectionTitle}>Paradas</Text>
 
           {waypoints.map((waypoint) => {
-            const meta = getWaypointMeta(waypoint.address_id, waypoint.id);
+            const meta = getWaypointMeta(waypoint);
 
             return (
               <TouchableOpacity

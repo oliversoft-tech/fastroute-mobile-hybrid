@@ -154,6 +154,9 @@ function buildLeafletMapHtml(
             }
           }
           renderMap();
+          if (changed) {
+            applyViewport();
+          }
         });
 
         marker.on('dblclick', () => {

@@ -1,5 +1,6 @@
 import { Route, RouteDetail, Waypoint, WaypointStatus } from './types';
 import { httpClient } from './httpClient';
+import { listRouteWaypointsFromSupabase } from './supabaseDataApi';
 
 interface ApiObject {
   [key: string]: unknown;
@@ -224,9 +225,9 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
   const state = pickString(resolved.state, resolved.uf, address.state, address.uf);
   const zip = pickString(resolved.zipcode, resolved.zip_code, resolved.cep, address.zipcode, address.cep);
   const complement = pickString(resolved.complement, resolved.complemento, address.complement, address.complemento);
-  const streetLine = [street, number].filter(Boolean).join(', ');
-  const regionParts = [district, city, state].filter(Boolean).join(' - ');
-  const detailedTitle = explicitTitle ?? streetLine ?? regionParts ?? 'Endereço não informado';
+  const streetLine = [street, number].filter(Boolean).join(', ').trim();
+  const regionParts = [district, city, state].filter(Boolean).join(' - ').trim();
+  const detailedTitle = explicitTitle || streetLine || regionParts || 'Endereço não informado';
   const detailedSubtitle = [zip, regionParts, complement].filter(Boolean).join(' • ');
 
   return {
@@ -332,6 +333,25 @@ export async function listRoutes() {
 
 export async function getRouteDetails(routeId: number) {
   const [route] = await fetchRoutes(routeId);
+  try {
+    const waypointsFromSupabase = await listRouteWaypointsFromSupabase(routeId);
+    if (route) {
+      return {
+        ...route,
+        waypoints: waypointsFromSupabase
+      };
+    }
+
+    return {
+      id: routeId,
+      cluster_id: 0,
+      status: 'PENDENTE' as const,
+      created_at: new Date().toISOString(),
+      waypoints: waypointsFromSupabase
+    };
+  } catch {
+    // Mantem fallback via webhook quando consulta relacional no Supabase falhar.
+  }
 
   if (!route) {
     return {
@@ -347,6 +367,15 @@ export async function getRouteDetails(routeId: number) {
 }
 
 export async function listRouteWaypoints(routeId: number) {
+  try {
+    const fromSupabase = await listRouteWaypointsFromSupabase(routeId);
+    if (fromSupabase.length > 0) {
+      return fromSupabase;
+    }
+  } catch {
+    // fallback para payload do webhook
+  }
+
   const route = await getRouteDetails(routeId);
   return route.waypoints ?? [];
 }

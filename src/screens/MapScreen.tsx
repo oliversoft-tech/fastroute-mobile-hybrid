@@ -23,7 +23,14 @@ type WaypointBadge = {
 };
 
 function buildLeafletMapHtml(
-  points: Array<{ id: number; title: string; subtitle: string; latitude: number; longitude: number }>
+  points: Array<{
+    pointKey: string;
+    waypointId: number;
+    title: string;
+    subtitle: string;
+    latitude: number;
+    longitude: number;
+  }>
 ) {
   const payload = JSON.stringify(
     points.map((point, index) => ({
@@ -48,8 +55,8 @@ function buildLeafletMapHtml(
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const points = ${payload};
-    const originalOrder = new Map(points.map((point, index) => [point.id, index + 1]));
-    const movedIds = new Set();
+    const originalOrder = new Map(points.map((point, index) => [point.pointKey, index + 1]));
+    const movedPointKeys = new Set();
     const map = L.map('map', { zoomControl: true, attributionControl: true });
     const markersLayer = L.layerGroup().addTo(map);
 
@@ -63,7 +70,7 @@ function buildLeafletMapHtml(
     }
 
     function createIcon(point, order, total) {
-      const wasReordered = movedIds.has(point.id);
+      const wasReordered = movedPointKeys.has(point.pointKey);
       const isStart = order === 1;
       const isEnd = order === total && total > 1;
       const bg = wasReordered ? '#F59E0B' : (isStart ? '#A855F7' : (isEnd ? '#CC3D36' : '#2154b3'));
@@ -88,8 +95,8 @@ function buildLeafletMapHtml(
       map.fitBounds(bounds, { padding: [40, 40] });
     }
 
-    function reorder(draggedId, droppedLatLng) {
-      const fromIndex = points.findIndex((point) => point.id === draggedId);
+    function reorder(draggedKey, droppedLatLng) {
+      const fromIndex = points.findIndex((point) => point.pointKey === draggedKey);
       if (fromIndex < 0) {
         return false;
       }
@@ -135,15 +142,15 @@ function buildLeafletMapHtml(
         }).addTo(markersLayer);
 
         marker.on('dragend', (event) => {
-          const changed = reorder(point.id, event.target.getLatLng());
+          const changed = reorder(point.pointKey, event.target.getLatLng());
           if (changed) {
-            const currentIndex = points.findIndex((entry) => entry.id === point.id);
+            const currentIndex = points.findIndex((entry) => entry.pointKey === point.pointKey);
             const currentOrder = currentIndex + 1;
-            const original = originalOrder.get(point.id);
+            const original = originalOrder.get(point.pointKey);
             if (original === currentOrder) {
-              movedIds.delete(point.id);
+              movedPointKeys.delete(point.pointKey);
             } else {
-              movedIds.add(point.id);
+              movedPointKeys.add(point.pointKey);
             }
           }
           renderMap();
@@ -152,7 +159,8 @@ function buildLeafletMapHtml(
         marker.on('dblclick', () => {
           emit({
             type: 'waypoint_dblclick',
-            waypointId: point.id,
+            waypointId: point.waypointId,
+            pointKey: point.pointKey,
             order,
             title: point.title,
             subtitle: point.subtitle || '',
@@ -165,7 +173,7 @@ function buildLeafletMapHtml(
         marker.bindTooltip('<b>' + pointType + ' #' + order + ' · ' + point.title + '</b>' + subtitle);
       });
 
-      emit({ type: 'reorder', order: points.map((point) => point.id) });
+      emit({ type: 'reorder', order: points.map((point) => point.pointKey) });
     }
 
     applyViewport();
@@ -177,15 +185,69 @@ function buildLeafletMapHtml(
 
 export function MapScreen({ route }: Props) {
   const { waypoints } = route.params;
-  const [orderedWaypoints, setOrderedWaypoints] = useState<Waypoint[]>([]);
+  const [orderedPointKeys, setOrderedPointKeys] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [mapLoadError, setMapLoadError] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
   const initialWaypoints = useMemo(() => [...waypoints].sort((a, b) => a.seq_order - b.seq_order), [waypoints]);
 
+  const initialPoints = useMemo(
+    () =>
+      initialWaypoints.map((waypoint, index) => {
+        const meta = getWaypointMeta(waypoint);
+        return {
+          pointKey: `pin-${index + 1}-${waypoint.id}`,
+          waypoint,
+          waypointId: waypoint.id,
+          title: meta.title,
+          subtitle: meta.subtitle,
+          latitude: meta.latitude,
+          longitude: meta.longitude
+        };
+      }),
+    [initialWaypoints]
+  );
+
   useEffect(() => {
-    setOrderedWaypoints(initialWaypoints);
-  }, [initialWaypoints]);
+    setOrderedPointKeys(initialPoints.map((point) => point.pointKey));
+  }, [initialPoints]);
+
+  const pointsByKey = useMemo(
+    () => new Map(initialPoints.map((point) => [point.pointKey, point])),
+    [initialPoints]
+  );
+
+  const orderedPoints = useMemo(() => {
+    if (orderedPointKeys.length === 0) {
+      return initialPoints;
+    }
+
+    const usedKeys = new Set<string>();
+    const reordered = orderedPointKeys
+      .map((pointKey) => pointsByKey.get(pointKey))
+      .filter((point): point is (typeof initialPoints)[number] => Boolean(point))
+      .map((point) => {
+        usedKeys.add(point.pointKey);
+        return point;
+      });
+
+    for (const point of initialPoints) {
+      if (!usedKeys.has(point.pointKey)) {
+        reordered.push(point);
+      }
+    }
+
+    return reordered;
+  }, [initialPoints, orderedPointKeys, pointsByKey]);
+
+  const orderedWaypoints = useMemo(
+    () =>
+      orderedPoints.map((point, index) => ({
+        ...point.waypoint,
+        seq_order: index + 1
+      })),
+    [orderedPoints]
+  );
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -216,32 +278,8 @@ export function MapScreen({ route }: Props) {
       }
 
       if (payload.type === 'reorder' && Array.isArray(payload.order)) {
-        const orderIds = payload.order.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry));
-        setOrderedWaypoints((current) => {
-          if (orderIds.length === 0) {
-            return current;
-          }
-
-          const mapById = new Map(current.map((waypoint) => [waypoint.id, waypoint]));
-          const reordered = orderIds
-            .map((id) => mapById.get(id))
-            .filter((item): item is Waypoint => Boolean(item))
-            .map((waypoint, index) => ({
-              ...waypoint,
-              seq_order: index + 1
-            }));
-
-          if (reordered.length !== current.length) {
-            const missing = current.filter((waypoint) => !orderIds.includes(waypoint.id));
-            const merged = [...reordered, ...missing];
-            return merged.map((waypoint, index) => ({
-              ...waypoint,
-              seq_order: index + 1
-            }));
-          }
-
-          return reordered;
-        });
+        const orderKeys = payload.order.map((entry) => String(entry));
+        setOrderedPointKeys(orderKeys);
       }
 
       if (payload.type === 'waypoint_dblclick') {
@@ -284,43 +322,15 @@ export function MapScreen({ route }: Props) {
     return () => clearTimeout(timeout);
   }, [badge]);
 
-  const initialPoints = useMemo(
-    () =>
-      initialWaypoints.map((waypoint) => {
-        const meta = getWaypointMeta(waypoint);
-        return {
-          id: waypoint.id,
-          title: meta.title,
-          subtitle: meta.subtitle,
-          latitude: meta.latitude,
-          longitude: meta.longitude
-        };
-      }),
-    [initialWaypoints]
-  );
-
-  const points = useMemo(
-    () =>
-      orderedWaypoints.map((waypoint) => {
-        const meta = getWaypointMeta(waypoint);
-        return {
-          id: waypoint.id,
-          title: meta.title,
-          subtitle: meta.subtitle,
-          latitude: meta.latitude,
-          longitude: meta.longitude
-        };
-      }),
-    [orderedWaypoints]
-  );
-
   const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
 
   const nativeMapUrl = useMemo(() => {
-    const initial = points[0] ?? { latitude: 40.211, longitude: -8.429 };
-    const markers = points.map((point) => `${point.latitude},${point.longitude},lightblue1`).join('|');
+    const initial = orderedPoints[0] ?? { latitude: 40.211, longitude: -8.429 };
+    const markers = orderedPoints
+      .map((point) => `${point.latitude},${point.longitude},lightblue1`)
+      .join('|');
     return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
-  }, [points]);
+  }, [orderedPoints]);
 
   const openDirections = async () => {
     if (orderedWaypoints.length === 0) {

@@ -34,10 +34,13 @@ function pseudoCoordinate(seed: number, origin: number, factor: number) {
 }
 
 export function getWaypointMeta(waypoint: Waypoint): WaypointMeta {
+  const normalizedTitle = waypoint.title?.trim() || 'Endereço não informado';
+  const normalizedSubtitle = waypoint.subtitle?.trim() ?? '';
+
   if (typeof waypoint.latitude === 'number' && typeof waypoint.longitude === 'number') {
     return {
-      title: waypoint.title ?? 'Endereço não informado',
-      subtitle: waypoint.subtitle ?? '',
+      title: normalizedTitle,
+      subtitle: normalizedSubtitle,
       latitude: waypoint.latitude,
       longitude: waypoint.longitude
     };
@@ -51,8 +54,8 @@ export function getWaypointMeta(waypoint: Waypoint): WaypointMeta {
   }
 
   return {
-    title: waypoint.title ?? 'Endereço não informado',
-    subtitle: waypoint.subtitle ?? '',
+    title: normalizedTitle,
+    subtitle: normalizedSubtitle,
     latitude: pseudoCoordinate(addressId + waypointId, 40.211, 0.05),
     longitude: pseudoCoordinate(addressId + waypointId * 2, -8.429, 0.05)
   };

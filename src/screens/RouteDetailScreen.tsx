@@ -167,9 +167,6 @@ export function RouteDetailScreen({ route, navigation }: Props) {
                 onPress={() => onWaypointPress(waypoint)}
               >
                 <View style={styles.waypointTop}>
-                  <View style={styles.idBubble}>
-                    <Text style={styles.idBubbleText}>#{waypoint.seq_order}</Text>
-                  </View>
                   <View style={styles.waypointTextColumn}>
                     <Text style={styles.waypointTitle}>{meta.title}</Text>
                     {meta.subtitle ? <Text style={styles.waypointSub}>{meta.subtitle}</Text> : null}
@@ -267,18 +264,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8
-  },
-  idBubble: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: '#EFF4FF',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  idBubbleText: {
-    color: colors.primary,
-    fontWeight: '800'
   },
   waypointTextColumn: {
     flex: 1

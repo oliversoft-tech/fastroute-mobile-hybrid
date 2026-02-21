@@ -13,6 +13,9 @@ function pickString(...values: unknown[]) {
 
     const trimmed = value.trim();
     if (trimmed.length > 0) {
+      if (/^\d+$/.test(trimmed)) {
+        continue;
+      }
       return trimmed;
     }
   }

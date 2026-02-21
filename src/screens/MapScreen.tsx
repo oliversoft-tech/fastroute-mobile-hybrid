@@ -49,6 +49,7 @@ function buildLeafletMapHtml(
   <script>
     const points = ${payload};
     const originalOrder = new Map(points.map((point, index) => [point.id, index + 1]));
+    const movedIds = new Set();
     const map = L.map('map', { zoomControl: true, attributionControl: true });
     const markersLayer = L.layerGroup().addTo(map);
 
@@ -62,10 +63,10 @@ function buildLeafletMapHtml(
     }
 
     function createIcon(point, order, total) {
-      const wasReordered = originalOrder.get(point.id) !== order;
+      const wasReordered = movedIds.has(point.id);
       const isStart = order === 1;
       const isEnd = order === total && total > 1;
-      const bg = wasReordered ? '#F59E0B' : (isStart ? '#1D8E4A' : (isEnd ? '#CC3D36' : '#2154b3'));
+      const bg = wasReordered ? '#F59E0B' : (isStart ? '#A855F7' : (isEnd ? '#CC3D36' : '#2154b3'));
       return L.divIcon({
         className: '',
         html: '<div class="pin" style="background:' + bg + ';">' + order + '</div>',
@@ -90,7 +91,7 @@ function buildLeafletMapHtml(
     function reorder(draggedId, droppedLatLng) {
       const fromIndex = points.findIndex((point) => point.id === draggedId);
       if (fromIndex < 0) {
-        return;
+        return false;
       }
 
       const droppedPoint = map.latLngToContainerPoint(droppedLatLng);
@@ -112,7 +113,10 @@ function buildLeafletMapHtml(
       if (targetIndex !== fromIndex && minDistance <= 90) {
         const moved = points.splice(fromIndex, 1)[0];
         points.splice(targetIndex, 0, moved);
+        return true;
       }
+
+      return false;
     }
 
     function renderMap() {
@@ -120,7 +124,7 @@ function buildLeafletMapHtml(
 
       points.forEach((point, index) => {
         const order = index + 1;
-        const wasReordered = originalOrder.get(point.id) !== order;
+        const wasReordered = movedIds.has(point.id);
         const isStart = order === 1;
         const isEnd = order === points.length && points.length > 1;
         const pointType = isStart ? 'Início' : (isEnd ? 'Fim' : 'Parada');
@@ -131,7 +135,17 @@ function buildLeafletMapHtml(
         }).addTo(markersLayer);
 
         marker.on('dragend', (event) => {
-          reorder(point.id, event.target.getLatLng());
+          const changed = reorder(point.id, event.target.getLatLng());
+          if (changed) {
+            const currentIndex = points.findIndex((entry) => entry.id === point.id);
+            const currentOrder = currentIndex + 1;
+            const original = originalOrder.get(point.id);
+            if (original === currentOrder) {
+              movedIds.delete(point.id);
+            } else {
+              movedIds.add(point.id);
+            }
+          }
           renderMap();
         });
 
@@ -391,7 +405,7 @@ export function MapScreen({ route }: Props) {
 
       <View style={styles.bottomBar}>
         <Text style={styles.bottomHint}>
-          Número do pin = ordem da rota. Verde = Início, vermelho = Fim, laranja = reordenado.
+          Número do pin = ordem da rota. Lilás = Início, vermelho = Fim, laranja = reordenado.
         </Text>
         <PrimaryButton
           label="Confirmar ordem"

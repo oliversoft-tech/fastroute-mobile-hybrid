@@ -131,7 +131,7 @@ function buildLeafletMapHtml(
 
       points.forEach((point, index) => {
         const order = index + 1;
-        const wasReordered = movedIds.has(point.id);
+        const wasReordered = movedPointKeys.has(point.pointKey);
         const isStart = order === 1;
         const isEnd = order === points.length && points.length > 1;
         const pointType = isStart ? 'Início' : (isEnd ? 'Fim' : 'Parada');

@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Alert,
+  Image,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View
+} from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
@@ -11,11 +21,13 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { GOOGLE_MAPS_API_KEY } from '../config/maps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
+const WebIFrame = 'iframe' as unknown as React.ComponentType<Record<string, unknown>>;
 
 export function MapScreen({ route }: Props) {
   const { waypoints } = route.params;
   const [orderedWaypoints, setOrderedWaypoints] = useState<Waypoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [mapLoadError, setMapLoadError] = useState(false);
 
   useEffect(() => {
     const initial = [...waypoints].sort((a, b) => a.seq_order - b.seq_order);
@@ -37,6 +49,33 @@ export function MapScreen({ route }: Props) {
       .map(({ meta }) => `${meta.latitude},${meta.longitude},lightblue1`)
       .join('|');
     return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
+  }, [points]);
+
+  const embedMapUrl = useMemo(() => {
+    const fallback = {
+      minLat: 40.18,
+      maxLat: 40.25,
+      minLon: -8.47,
+      maxLon: -8.38,
+      markerLat: 40.211,
+      markerLon: -8.429
+    };
+
+    if (points.length === 0) {
+      return `https://www.openstreetmap.org/export/embed.html?bbox=${fallback.minLon},${fallback.minLat},${fallback.maxLon},${fallback.maxLat}&layer=mapnik&marker=${fallback.markerLat},${fallback.markerLon}`;
+    }
+
+    const lats = points.map(({ meta }) => meta.latitude);
+    const lons = points.map(({ meta }) => meta.longitude);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLon = Math.min(...lons);
+    const maxLon = Math.max(...lons);
+    const padLat = Math.max((maxLat - minLat) * 0.25, 0.01);
+    const padLon = Math.max((maxLon - minLon) * 0.25, 0.01);
+    const marker = points[0].meta;
+
+    return `https://www.openstreetmap.org/export/embed.html?bbox=${minLon - padLon},${minLat - padLat},${maxLon + padLon},${maxLat + padLat}&layer=mapnik&marker=${marker.latitude},${marker.longitude}`;
   }, [points]);
 
   const reorderWaypoint = (currentIndex: number, direction: -1 | 1) => {
@@ -140,7 +179,37 @@ export function MapScreen({ route }: Props) {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Image source={{ uri: mapUrl }} style={styles.map} resizeMode="cover" />
+      <View style={styles.map}>
+        {Platform.OS === 'web' ? (
+          <WebIFrame
+            src={embedMapUrl}
+            style={styles.webFrame}
+            loading="lazy"
+            referrerPolicy="no-referrer-when-downgrade"
+            title="Mapa da rota"
+          />
+        ) : (
+          <Image
+            source={{ uri: mapUrl }}
+            style={styles.nativeMapImage}
+            resizeMode="cover"
+            onError={() => setMapLoadError(true)}
+          />
+        )}
+
+        {Platform.OS !== 'web' && mapLoadError ? (
+          <View style={styles.mapFallbackOverlay}>
+            <Text style={styles.mapFallbackText}>Mapa indisponível neste dispositivo.</Text>
+            <PrimaryButton
+              label="Abrir rota no Google Maps"
+              onPress={() => {
+                void openGoogleMapsDirections();
+              }}
+              style={styles.fallbackButton}
+            />
+          </View>
+        ) : null}
+      </View>
 
       <View style={styles.legend}>
         <Text style={styles.legendTitle}>Paradas da rota</Text>
@@ -193,7 +262,35 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: '#dde8ff'
+    backgroundColor: '#dde8ff',
+    position: 'relative'
+  },
+  webFrame: {
+    width: '100%',
+    height: '100%',
+    borderWidth: 0
+  },
+  nativeMapImage: {
+    width: '100%',
+    height: '100%'
+  },
+  mapFallbackOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(11, 24, 50, 0.45)',
+    padding: 16
+  },
+  mapFallbackText: {
+    color: '#fff',
+    fontWeight: '700'
+  },
+  fallbackButton: {
+    marginTop: 12
   },
   legend: {
     borderRadius: 12,

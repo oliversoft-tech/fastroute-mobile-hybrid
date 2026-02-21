@@ -416,8 +416,10 @@ export async function updateWaypointStatus(
   });
 }
 
-export async function updateWaypointOrder(waypointId: number) {
-  await httpClient.patch('waypoint/order', {
-    waypoint_id: String(waypointId)
-  });
+export async function updateWaypointOrder(waypointIds: number[]) {
+  const orderedIds = waypointIds
+    .map((value) => Math.trunc(Number(value)))
+    .filter((value) => Number.isFinite(value));
+
+  await httpClient.patch('waypoint/order', orderedIds);
 }

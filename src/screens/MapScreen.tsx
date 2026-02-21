@@ -356,9 +356,8 @@ export function MapScreen({ route }: Props) {
   const onConfirmOrder = async () => {
     try {
       setLoading(true);
-      for (const waypoint of orderedWaypoints) {
-        await updateWaypointOrder(waypoint.id);
-      }
+      const orderedIds = orderedWaypoints.map((waypoint) => waypoint.id);
+      await updateWaypointOrder(orderedIds);
 
       Alert.alert('Ordem confirmada', 'Deseja iniciar a rota?', [
         {

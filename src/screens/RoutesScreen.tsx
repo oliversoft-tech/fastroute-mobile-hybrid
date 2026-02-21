@@ -87,6 +87,24 @@ export function RoutesScreen({ navigation }: Props) {
         <PrimaryButton label="Criar Rota" onPress={() => navigation.navigate('ImportRoute')} />
       </View>
 
+      <View style={styles.createCard}>
+        <Text style={styles.createTitle}>Operações avançadas</Text>
+        <View style={styles.inlineButtons}>
+          <PrimaryButton
+            label="Clusterização"
+            variant="neutral"
+            onPress={() => navigation.navigate('Clusterize')}
+            style={styles.flexButton}
+          />
+          <PrimaryButton
+            label="Criar Manual"
+            variant="primary"
+            onPress={() => navigation.navigate('CreateRouteManual')}
+            style={styles.flexButton}
+          />
+        </View>
+      </View>
+
       {loading ? (
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="small" color={colors.primary} />
@@ -182,6 +200,13 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '700',
     marginBottom: 2
+  },
+  inlineButtons: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  flexButton: {
+    flex: 1
   },
   loaderContainer: {
     paddingVertical: 24,

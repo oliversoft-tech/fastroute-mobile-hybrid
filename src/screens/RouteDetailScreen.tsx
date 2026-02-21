@@ -13,7 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
-import { getRouteDetails, updateWaypointStatus } from '../api/routesApi';
+import { getRouteDetails, listRouteWaypoints, updateWaypointStatus } from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 import { RouteDetail, Waypoint } from '../api/types';
 import { StatusBadge } from '../components/StatusBadge';
@@ -32,7 +32,16 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const loadRouteDetails = useCallback(async () => {
     try {
       const data = await getRouteDetails(routeId);
-      setRouteDetail(data);
+      if (data.waypoints && data.waypoints.length > 0) {
+        setRouteDetail(data);
+        return;
+      }
+
+      const waypoints = await listRouteWaypoints(routeId);
+      setRouteDetail({
+        ...data,
+        waypoints
+      });
     } catch (error) {
       Alert.alert('Erro ao carregar rota', getApiError(error));
     } finally {

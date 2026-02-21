@@ -28,3 +28,10 @@ export async function updateWaypointStatus(
     status
   });
 }
+
+export async function listRouteWaypoints(routeId: number) {
+  const { data } = await httpClient.get<NonNullable<RouteDetail['waypoints']>>(
+    `routes/${routeId}/waypoints`
+  );
+  return data ?? [];
+}

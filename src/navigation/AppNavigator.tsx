@@ -4,6 +4,8 @@ import { RootStackParamList } from './types';
 import { LoginScreen } from '../screens/LoginScreen';
 import { RoutesScreen } from '../screens/RoutesScreen';
 import { ImportRouteScreen } from '../screens/ImportRouteScreen';
+import { ClusterizeScreen } from '../screens/ClusterizeScreen';
+import { CreateRouteManualScreen } from '../screens/CreateRouteManualScreen';
 import { RouteDetailScreen } from '../screens/RouteDetailScreen';
 import { DeliveryScreen } from '../screens/DeliveryScreen';
 import { MapScreen } from '../screens/MapScreen';
@@ -41,6 +43,16 @@ export function AppNavigator() {
             name="ImportRoute"
             component={ImportRouteScreen}
             options={{ title: 'Importar Rota' }}
+          />
+          <Stack.Screen
+            name="Clusterize"
+            component={ClusterizeScreen}
+            options={{ title: 'Clusterização' }}
+          />
+          <Stack.Screen
+            name="CreateRouteManual"
+            component={CreateRouteManualScreen}
+            options={{ title: 'Criar Rota Manual' }}
           />
           <Stack.Screen
             name="RouteDetail"

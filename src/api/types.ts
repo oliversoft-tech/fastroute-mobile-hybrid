@@ -25,3 +25,8 @@ export interface ImportResult {
   addresses_created: number;
   routes_generated: number;
 }
+
+export interface ClusterResult {
+  address_id: number;
+  cluster_id: number;
+}

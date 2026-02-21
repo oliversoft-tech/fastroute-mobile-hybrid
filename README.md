@@ -6,8 +6,11 @@ App React Native com Expo, inspirado nas telas do prototipo, para operacao de ro
 
 - Login via `POST /login`
 - Lista de rotas (`GET /routes`)
+- Clusterizacao de enderecos (`POST /clusterize`)
+- Criacao manual de rota por cluster (`POST /routes`)
 - Importacao de pedidos por arquivo (`POST /route/import`)
 - Detalhes da rota com waypoints (`GET /routes/{id}`)
+- Listagem dedicada de waypoints (`GET /routes/{id}/waypoints`)
 - Atualizacao de status da entrega (`PATCH /routes/{id}/waypoints`)
 - Visualizacao da rota no mapa
 - Abrir parada no Google Maps

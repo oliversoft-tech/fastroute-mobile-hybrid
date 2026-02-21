@@ -122,7 +122,7 @@ export function RoutesScreen({ navigation }: Props) {
               </View>
               <View style={styles.routeTitleColumn}>
                 <Text style={styles.routeTitle}>Rota #{route.id}</Text>
-                <Text style={styles.routeMeta}>Cluster {route.cluster_id} • {formatDate(route.created_at)}</Text>
+                <Text style={styles.routeMeta}>Criada em {formatDate(route.created_at)}</Text>
               </View>
               <StatusBadge status={route.status} type="route" />
             </View>

@@ -24,6 +24,8 @@ import { RouteDetail, Waypoint } from '../api/types';
 import { StatusBadge } from '../components/StatusBadge';
 import { getWaypointMeta } from '../utils/waypointMeta';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { formatDate } from '../utils/date';
+import { openGoogleMapsRoute } from '../utils/googleMaps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RouteDetail'>;
 
@@ -73,7 +75,12 @@ export function RouteDetailScreen({ route, navigation }: Props) {
       setSaving(true);
       await startRoute(routeId);
       await loadRouteDetails();
-      Alert.alert('Rota iniciada', `Rota #${routeId} iniciada com sucesso.`);
+      if (waypoints.length === 0) {
+        Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);
+        return;
+      }
+
+      await openGoogleMapsRoute(waypoints);
     } catch (error) {
       Alert.alert('Erro ao iniciar rota', getApiError(error));
     } finally {
@@ -127,8 +134,8 @@ export function RouteDetailScreen({ route, navigation }: Props) {
                 <Text style={styles.metaValue}>{waypoints.length}</Text>
               </View>
               <View style={styles.metaItem}>
-                <Text style={styles.metaLabel}>Cluster</Text>
-                <Text style={styles.metaValue}>{routeDetail?.cluster_id ?? '-'}</Text>
+                <Text style={styles.metaLabel}>Criada em</Text>
+                <Text style={styles.metaValue}>{formatDate(routeDetail?.created_at ?? '')}</Text>
               </View>
             </View>
 
@@ -165,7 +172,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
                   </View>
                   <View style={styles.waypointTextColumn}>
                     <Text style={styles.waypointTitle}>{meta.title}</Text>
-                    <Text style={styles.waypointSub}>{meta.subtitle}</Text>
+                    {meta.subtitle ? <Text style={styles.waypointSub}>{meta.subtitle}</Text> : null}
                   </View>
                   <StatusBadge status={waypoint.status} type="waypoint" />
                 </View>

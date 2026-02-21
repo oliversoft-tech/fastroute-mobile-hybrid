@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -18,7 +17,7 @@ import { startRoute, updateWaypointOrder } from '../api/routesApi';
 import { Waypoint } from '../api/types';
 import { getApiError } from '../api/httpClient';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { GOOGLE_MAPS_API_KEY } from '../config/maps';
+import { openGoogleMapsRoute } from '../utils/googleMaps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 const WebIFrame = 'iframe' as unknown as React.ComponentType<Record<string, unknown>>;
@@ -51,18 +50,14 @@ export function MapScreen({ route }: Props) {
     return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
   }, [points]);
 
-  const embedMapUrl = useMemo(() => {
-    const fallback = {
-      minLat: 40.18,
-      maxLat: 40.25,
-      minLon: -8.47,
-      maxLon: -8.38,
-      markerLat: 40.211,
-      markerLon: -8.429
-    };
-
+  const mapBounds = useMemo(() => {
     if (points.length === 0) {
-      return `https://www.openstreetmap.org/export/embed.html?bbox=${fallback.minLon},${fallback.minLat},${fallback.maxLon},${fallback.maxLat}&layer=mapnik&marker=${fallback.markerLat},${fallback.markerLon}`;
+      return {
+        minLat: 40.18,
+        maxLat: 40.25,
+        minLon: -8.47,
+        maxLon: -8.38
+      };
     }
 
     const lats = points.map(({ meta }) => meta.latitude);
@@ -73,10 +68,39 @@ export function MapScreen({ route }: Props) {
     const maxLon = Math.max(...lons);
     const padLat = Math.max((maxLat - minLat) * 0.25, 0.01);
     const padLon = Math.max((maxLon - minLon) * 0.25, 0.01);
-    const marker = points[0].meta;
 
-    return `https://www.openstreetmap.org/export/embed.html?bbox=${minLon - padLon},${minLat - padLat},${maxLon + padLon},${maxLat + padLat}&layer=mapnik&marker=${marker.latitude},${marker.longitude}`;
+    return {
+      minLat: minLat - padLat,
+      maxLat: maxLat + padLat,
+      minLon: minLon - padLon,
+      maxLon: maxLon + padLon
+    };
   }, [points]);
+
+  const embedMapUrl = useMemo(
+    () =>
+      `https://www.openstreetmap.org/export/embed.html?bbox=${mapBounds.minLon},${mapBounds.minLat},${mapBounds.maxLon},${mapBounds.maxLat}&layer=mapnik`,
+    [mapBounds]
+  );
+
+  const mapPins = useMemo(() => {
+    const latRange = mapBounds.maxLat - mapBounds.minLat || 1;
+    const lonRange = mapBounds.maxLon - mapBounds.minLon || 1;
+
+    return points.map(({ waypoint, meta }, index) => {
+      const rawX = (meta.longitude - mapBounds.minLon) / lonRange;
+      const rawY = 1 - (meta.latitude - mapBounds.minLat) / latRange;
+      const x = Math.min(Math.max(rawX, 0.03), 0.97);
+      const y = Math.min(Math.max(rawY, 0.03), 0.97);
+
+      return {
+        id: waypoint.id,
+        order: index + 1,
+        x,
+        y
+      };
+    });
+  }, [mapBounds, points]);
 
   const reorderWaypoint = (currentIndex: number, direction: -1 | 1) => {
     setOrderedWaypoints((current) => {
@@ -96,54 +120,19 @@ export function MapScreen({ route }: Props) {
     });
   };
 
-  const openGoogleMapsDirections = async () => {
-    if (points.length === 0) {
+  const openDirections = async () => {
+    if (orderedWaypoints.length === 0) {
       return;
     }
 
-    const coordinates = points.map(({ meta }) => `${meta.latitude},${meta.longitude}`);
-    let mapsUrl = '';
-
-    if (coordinates.length === 1) {
-      mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates[0])}`;
-      if (GOOGLE_MAPS_API_KEY) {
-        mapsUrl = `${mapsUrl}&key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}`;
-      }
-    } else {
-      const origin = coordinates[0];
-      const destination = coordinates[coordinates.length - 1];
-      const waypointList = coordinates.slice(1, -1);
-      const params = [
-        'api=1',
-        `origin=${encodeURIComponent(origin)}`,
-        `destination=${encodeURIComponent(destination)}`,
-        'travelmode=driving'
-      ];
-
-      if (waypointList.length > 0) {
-        params.push(`waypoints=${encodeURIComponent(waypointList.join('|'))}`);
-      }
-
-      if (GOOGLE_MAPS_API_KEY) {
-        params.push(`key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}`);
-      }
-
-      mapsUrl = `https://www.google.com/maps/dir/?${params.join('&')}`;
-    }
-
-    const canOpen = await Linking.canOpenURL(mapsUrl);
-    if (!canOpen) {
-      throw new Error('Não foi possível abrir o Google Maps neste dispositivo.');
-    }
-
-    await Linking.openURL(mapsUrl);
+    await openGoogleMapsRoute(orderedWaypoints);
   };
 
   const startRouteAndNavigate = async () => {
     try {
       setLoading(true);
       await startRoute(route.params.routeId);
-      await openGoogleMapsDirections();
+      await openDirections();
     } catch (error) {
       Alert.alert('Erro ao iniciar rota', getApiError(error));
     } finally {
@@ -197,13 +186,26 @@ export function MapScreen({ route }: Props) {
           />
         )}
 
+        {mapPins.length > 0 ? (
+          <View style={styles.mapPinsLayer} pointerEvents="none">
+            {mapPins.map((pin) => (
+              <View
+                key={pin.id}
+                style={[styles.mapPin, { left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }]}
+              >
+                <Text style={styles.mapPinText}>{pin.order}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         {Platform.OS !== 'web' && mapLoadError ? (
           <View style={styles.mapFallbackOverlay}>
             <Text style={styles.mapFallbackText}>Mapa indisponível neste dispositivo.</Text>
             <PrimaryButton
               label="Abrir rota no Google Maps"
               onPress={() => {
-                void openGoogleMapsDirections();
+                void openDirections();
               }}
               style={styles.fallbackButton}
             />
@@ -217,7 +219,7 @@ export function MapScreen({ route }: Props) {
           <View key={waypoint.id} style={styles.stopRow}>
             <View style={styles.stopTextColumn}>
               <Text style={styles.stopTitle}>#{index + 1} • {meta.title}</Text>
-              <Text style={styles.stopSub}>{meta.subtitle}</Text>
+              {meta.subtitle ? <Text style={styles.stopSub}>{meta.subtitle}</Text> : null}
             </View>
             <View style={styles.controls}>
               <Pressable
@@ -273,6 +275,34 @@ const styles = StyleSheet.create({
   nativeMapImage: {
     width: '100%',
     height: '100%'
+  },
+  mapPinsLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0
+  },
+  mapPin: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#fff',
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ translateX: -12 }, { translateY: -12 }],
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 }
+  },
+  mapPinText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800'
   },
   mapFallbackOverlay: {
     position: 'absolute',

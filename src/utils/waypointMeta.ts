@@ -36,8 +36,8 @@ function pseudoCoordinate(seed: number, origin: number, factor: number) {
 export function getWaypointMeta(waypoint: Waypoint): WaypointMeta {
   if (typeof waypoint.latitude === 'number' && typeof waypoint.longitude === 'number') {
     return {
-      title: waypoint.title ?? `Endereço #${waypoint.address_id}`,
-      subtitle: waypoint.subtitle ?? 'Sem descrição no endpoint',
+      title: waypoint.title ?? `Endereço ${waypoint.address_id}`,
+      subtitle: waypoint.subtitle ?? '',
       latitude: waypoint.latitude,
       longitude: waypoint.longitude
     };
@@ -51,8 +51,8 @@ export function getWaypointMeta(waypoint: Waypoint): WaypointMeta {
   }
 
   return {
-    title: waypoint.title ?? `Endereço #${addressId}`,
-    subtitle: waypoint.subtitle ?? 'Sem descrição no endpoint',
+    title: waypoint.title ?? `Endereço ${addressId}`,
+    subtitle: waypoint.subtitle ?? '',
     latitude: pseudoCoordinate(addressId + waypointId, 40.211, 0.05),
     longitude: pseudoCoordinate(addressId + waypointId * 2, -8.429, 0.05)
   };

@@ -65,7 +65,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
         </View>
 
         <Text style={styles.address}>{meta.title}</Text>
-        <Text style={styles.addressSub}>{meta.subtitle}</Text>
+        {meta.subtitle ? <Text style={styles.addressSub}>{meta.subtitle}</Text> : null}
 
         <PrimaryButton
           label="Abrir no Maps"

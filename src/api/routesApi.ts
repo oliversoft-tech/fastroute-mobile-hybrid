@@ -5,6 +5,21 @@ interface ApiObject {
   [key: string]: unknown;
 }
 
+function pickString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+
+  return undefined;
+}
+
 function tryParseJson(value: unknown): unknown {
   if (typeof value !== 'string') {
     return value;
@@ -153,43 +168,71 @@ function extractCollection(data: unknown) {
 function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: number): Waypoint {
   const resolved = tryParseJson(raw) as ApiObject;
   const address = (resolved.address as ApiObject | undefined) ?? {};
+  const addressId = toInteger(
+    resolved.address_id ?? resolved.addressId ?? address.id ?? resolved.id,
+    index + 1
+  );
+  const waypointId = toInteger(
+    resolved.id ?? resolved.waypoint_id ?? resolved.waypointId ?? resolved.stop_id ?? addressId,
+    addressId
+  );
+  const explicitTitle = pickString(
+    resolved.title,
+    resolved.name,
+    resolved.address_text,
+    resolved.addressLine,
+    resolved.address_line,
+    address.title,
+    address.name,
+    address.address_text
+  );
+  const street = pickString(
+    resolved.street,
+    resolved.logradouro,
+    resolved.rua,
+    resolved.address,
+    address.street,
+    address.logradouro,
+    address.rua,
+    address.address
+  );
+  const number = pickString(resolved.number, resolved.numero, address.number, address.numero);
+  const district = pickString(
+    resolved.district,
+    resolved.neighborhood,
+    resolved.bairro,
+    address.district,
+    address.neighborhood,
+    address.bairro
+  );
+  const city = pickString(resolved.city, resolved.cidade, address.city, address.cidade);
+  const state = pickString(resolved.state, resolved.uf, address.state, address.uf);
+  const zip = pickString(resolved.zipcode, resolved.zip_code, resolved.cep, address.zipcode, address.cep);
+  const complement = pickString(resolved.complement, resolved.complemento, address.complement, address.complemento);
+  const streetLine = [street, number].filter(Boolean).join(', ');
+  const regionParts = [district, city, state].filter(Boolean).join(' - ');
+  const detailedTitle = explicitTitle ?? streetLine ?? regionParts ?? `Endereço ${addressId}`;
+  const detailedSubtitle = [zip, regionParts, complement].filter(Boolean).join(' • ');
 
   return {
-    id: toInteger(resolved.id ?? resolved.waypoint_id ?? resolved.waypointId, index + 1),
+    id: waypointId,
     route_id: toInteger(resolved.route_id ?? resolved.routeId, routeIdFallback),
-    address_id: toInteger(
-      resolved.address_id ?? resolved.addressId ?? address.id ?? resolved.id,
-      index + 1
-    ),
+    address_id: addressId,
     seq_order: toInteger(resolved.seq_order ?? resolved.seqOrder ?? resolved.order, index + 1),
     status: mapWaypointStatus(resolved.status ?? resolved.delivery_status),
-    title: String(
-      resolved.title ??
-        resolved.name ??
-        resolved.address_text ??
-        resolved.address ??
-        address.title ??
-        address.street ??
-        ''
-    ).trim() || undefined,
-    subtitle: String(
-      resolved.subtitle ??
-        resolved.description ??
-        resolved.zipcode ??
-        address.subtitle ??
-        address.zipcode ??
-        ''
-    ).trim() || undefined,
+    title: detailedTitle,
+    subtitle: pickString(resolved.subtitle, resolved.description, address.subtitle) ?? detailedSubtitle,
     latitude: toNumber(
       resolved.latitude ?? resolved.lat ?? resolved.geo_lat ?? resolved.latlng_lat ?? address.latitude
     ),
     longitude: toNumber(
       resolved.longitude ??
-        resolved.long ??
-        resolved.lng ??
-        resolved.lon ??
-        resolved.geo_lng ??
-        address.longitude
+      resolved.long ??
+      resolved.lng ??
+      resolved.lon ??
+      resolved.geo_lng ??
+      address.long ??
+      address.longitude
     )
   };
 }

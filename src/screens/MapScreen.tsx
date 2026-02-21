@@ -174,7 +174,16 @@ function buildLeafletMapHtml(
 
       });
 
-      emit({ type: 'reorder', order: points.map((point) => point.pointKey) });
+      const movedWaypointIds = [...new Set(
+        points
+          .filter((point) => movedPointKeys.has(point.pointKey))
+          .map((point) => point.waypointId)
+      )];
+      emit({
+        type: 'reorder',
+        order: points.map((point) => point.pointKey),
+        movedWaypointIds
+      });
     }
 
     applyViewport();
@@ -187,6 +196,7 @@ function buildLeafletMapHtml(
 export function MapScreen({ route }: Props) {
   const { waypoints } = route.params;
   const [orderedPointKeys, setOrderedPointKeys] = useState<string[]>([]);
+  const [movedWaypointIds, setMovedWaypointIds] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);
   const [mapLoadError, setMapLoadError] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
@@ -211,6 +221,7 @@ export function MapScreen({ route }: Props) {
 
   useEffect(() => {
     setOrderedPointKeys(initialPoints.map((point) => point.pointKey));
+    setMovedWaypointIds([]);
   }, [initialPoints]);
 
   const pointsByKey = useMemo(
@@ -281,6 +292,14 @@ export function MapScreen({ route }: Props) {
       if (payload.type === 'reorder' && Array.isArray(payload.order)) {
         const orderKeys = payload.order.map((entry) => String(entry));
         setOrderedPointKeys(orderKeys);
+        if (Array.isArray(payload.movedWaypointIds)) {
+          const changedIds = [...new Set(
+            payload.movedWaypointIds
+              .map((entry) => Number(entry))
+              .filter((entry) => Number.isFinite(entry))
+          )];
+          setMovedWaypointIds(changedIds);
+        }
       }
 
       if (payload.type === 'waypoint_dblclick') {
@@ -356,8 +375,14 @@ export function MapScreen({ route }: Props) {
   const onConfirmOrder = async () => {
     try {
       setLoading(true);
-      const orderedIds = orderedWaypoints.map((waypoint) => waypoint.id);
-      await updateWaypointOrder(orderedIds);
+      const changedIds = [...new Set(
+        movedWaypointIds
+          .map((value) => Math.trunc(Number(value)))
+          .filter((value) => Number.isFinite(value))
+      )];
+      if (changedIds.length > 0) {
+        await updateWaypointOrder(changedIds);
+      }
 
       Alert.alert('Ordem confirmada', 'Deseja iniciar a rota?', [
         {

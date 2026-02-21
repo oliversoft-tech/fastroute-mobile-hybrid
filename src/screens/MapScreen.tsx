@@ -169,8 +169,6 @@ function buildLeafletMapHtml(
           });
         });
 
-        const subtitle = point.subtitle ? ('<br/>' + point.subtitle) : '';
-        marker.bindTooltip('<b>' + pointType + ' #' + order + ' · ' + point.title + '</b>' + subtitle);
       });
 
       emit({ type: 'reorder', order: points.map((point) => point.pointKey) });
@@ -399,6 +397,10 @@ export function MapScreen({ route }: Props) {
         ) : null}
       </View>
 
+      <View style={styles.routeHeader}>
+        <Text style={styles.routeHeaderTitle}>Rota #{route.params.routeId}</Text>
+      </View>
+
       {badge ? (
         <View style={styles.badgeCard}>
           <View style={styles.badgeHeader}>
@@ -461,9 +463,25 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700'
   },
-  badgeCard: {
+  routeHeader: {
     position: 'absolute',
     top: 14,
+    left: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
+  routeHeaderTitle: {
+    color: colors.textPrimary,
+    fontWeight: '800',
+    fontSize: 14
+  },
+  badgeCard: {
+    position: 'absolute',
+    top: 62,
     left: 14,
     right: 14,
     borderWidth: 1,

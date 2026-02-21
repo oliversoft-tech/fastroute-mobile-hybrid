@@ -177,11 +177,23 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
     addressId
   );
   const explicitTitle = pickString(
+    resolved.detailed_address,
+    resolved.detailedAddress,
+    resolved.full_address,
+    resolved.fullAddress,
+    resolved.formatted_address,
+    resolved.formattedAddress,
     resolved.title,
     resolved.name,
     resolved.address_text,
     resolved.addressLine,
     resolved.address_line,
+    address.detailed_address,
+    address.detailedAddress,
+    address.full_address,
+    address.fullAddress,
+    address.formatted_address,
+    address.formattedAddress,
     address.title,
     address.name,
     address.address_text
@@ -211,7 +223,7 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
   const complement = pickString(resolved.complement, resolved.complemento, address.complement, address.complemento);
   const streetLine = [street, number].filter(Boolean).join(', ');
   const regionParts = [district, city, state].filter(Boolean).join(' - ');
-  const detailedTitle = explicitTitle ?? streetLine ?? regionParts ?? `Endereço ${addressId}`;
+  const detailedTitle = explicitTitle ?? streetLine ?? regionParts ?? 'Endereço não informado';
   const detailedSubtitle = [zip, regionParts, complement].filter(Boolean).join(' • ');
 
   return {

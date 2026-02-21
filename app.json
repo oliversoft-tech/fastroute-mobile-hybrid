@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "FastRoute",
+    "slug": "fastroute-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "fastroute",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F3F4F6"
+      }
+    },
+    "plugins": [
+      "expo-document-picker",
+      "expo-asset",
+      "expo-secure-store"
+    ]
+  }
+}

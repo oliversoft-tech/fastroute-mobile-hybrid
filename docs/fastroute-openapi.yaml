@@ -1,0 +1,247 @@
+openapi: 3.0.3
+info:
+  title: FastRoute API
+  description: |
+    API responsável por ingestão de pedidos via WhatsApp, processamento,
+    clusterização geográfica e geração automática de rotas e waypoints.
+  version: 1.0.0
+
+servers:
+  - url: https://api.fastroute.pt
+    description: Production
+  - url: https://staging.fastroute.pt
+    description: Staging
+
+tags:
+  - name: Ingestion
+  - name: Routes
+  - name: Waypoints
+  - name: Clustering
+  - name: Clients
+  - name: Orders
+
+paths:
+
+  /webhooks/whatsapp:
+    post:
+      tags: [Ingestion]
+      summary: Receive WhatsApp webhook event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhatsAppWebhookPayload'
+      responses:
+        '200':
+          description: Event received
+        '400':
+          description: Invalid payload
+
+  /orders/import:
+    post:
+      tags: [Orders]
+      summary: Import orders from XLSX
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Orders imported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportResult'
+
+  /clusterize:
+    post:
+      tags: [Clustering]
+      summary: Cluster addresses using DBSCAN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eps]
+              properties:
+                eps:
+                  type: number
+                  example: 0.01
+      responses:
+        '200':
+          description: Cluster result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ClusterResult'
+
+  /routes:
+    get:
+      tags: [Routes]
+      summary: List routes
+      responses:
+        '200':
+          description: Route list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Route'
+
+    post:
+      tags: [Routes]
+      summary: Create route manually
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cluster_id]
+              properties:
+                cluster_id:
+                  type: integer
+      responses:
+        '201':
+          description: Route created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Route'
+
+  /routes/{id}:
+    get:
+      tags: [Routes]
+      summary: Get route details
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Route detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDetail'
+
+  /routes/{id}/waypoints:
+    get:
+      tags: [Waypoints]
+      summary: List waypoints of a route
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Waypoint list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Waypoint'
+
+    patch:
+      tags: [Waypoints]
+      summary: Update waypoint status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [waypoint_id, status]
+              properties:
+                waypoint_id:
+                  type: integer
+                status:
+                  type: string
+                  enum: [PENDENTE, EM_ROTA, CONCLUIDO]
+      responses:
+        '200':
+          description: Waypoint updated
+
+components:
+  schemas:
+
+    WhatsAppWebhookPayload:
+      type: object
+      properties:
+        entry:
+          type: array
+          items:
+            type: object
+
+    ImportResult:
+      type: object
+      properties:
+        orders_created:
+          type: integer
+        addresses_created:
+          type: integer
+        routes_generated:
+          type: integer
+
+    ClusterResult:
+      type: object
+      properties:
+        address_id:
+          type: integer
+        cluster_id:
+          type: integer
+
+    Route:
+      type: object
+      properties:
+        id:
+          type: integer
+        cluster_id:
+          type: integer
+        status:
+          type: string
+          enum: [PENDENTE, EM_ROTA, FINALIZADA]
+        created_at:
+          type: string
+          format: date-time
+
+    RouteDetail:
+      allOf:
+        - $ref: '#/components/schemas/Route'
+        - type: object
+          properties:
+            waypoints:
+              type: array
+              items:
+                $ref: '#/components/schemas/Waypoint'
+
+    Waypoint:
+      type: object
+      properties:
+        id:
+          type: integer
+        route_id:
+          type: integer
+        address_id:
+          type: integer
+        seq_order:
+          type: integer
+        status:
+          type: string
+          enum: [PENDENTE, EM_ROTA, CONCLUIDO]

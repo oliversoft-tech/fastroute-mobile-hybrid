@@ -1,0 +1,37 @@
+{
+  "name": "fastroute-driver",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo/AppEntry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~4.0.1",
+    "@react-navigation/native": "^7.0.14",
+    "@react-navigation/native-stack": "^7.2.0",
+    "@supabase/supabase-js": "^2.97.0",
+    "axios": "^1.8.1",
+    "expo": "~52.0.28",
+    "expo-asset": "~11.0.5",
+    "expo-document-picker": "~13.0.3",
+    "expo-linking": "~7.0.3",
+    "expo-secure-store": "~14.0.1",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.6",
+    "react-native-gesture-handler": "~2.20.2",
+    "react-native-safe-area-context": "4.12.0",
+    "react-native-screens": "~4.4.0",
+    "react-native-web": "~0.19.13"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.12",
+    "playwright": "^1.58.2",
+    "typescript": "~5.3.3"
+  }
+}

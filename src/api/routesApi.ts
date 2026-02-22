@@ -245,6 +245,7 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
     id: waypointId,
     route_id: toInteger(resolved.route_id ?? resolved.routeId, routeIdFallback),
     address_id: addressId,
+    user_id: toNumber(resolved.user_id ?? resolved.userId ?? address.user_id ?? address.userId),
     seq_order: toInteger(resolved.seq_order ?? resolved.seqOrder ?? resolved.order, index + 1),
     status: mapWaypointStatus(resolved.status ?? resolved.delivery_status),
     title: detailedTitle,
@@ -482,24 +483,26 @@ export async function updateWaypointStatus(
 export async function uploadWaypointPhoto(params: {
   routeId: number;
   waypointId: number;
+  userId?: number;
   addressId?: number;
-  uri: string;
+  imageBase64: string;
   fileName: string;
 }) {
-  const payload = new FormData();
-  payload.append('route_id', String(params.routeId));
-  payload.append('waypoint_id', String(params.waypointId));
-  payload.append('file_name', params.fileName);
+  const payload: Record<string, string> = {
+    route_id: String(params.routeId),
+    waypoint_id: String(params.waypointId),
+    file_name: params.fileName,
+    base_64: params.imageBase64,
+    image_base64: params.imageBase64
+  };
 
-  if (Number.isFinite(Number(params.addressId))) {
-    payload.append('address_id', String(params.addressId));
+  if (Number.isFinite(Number(params.userId))) {
+    payload.user_id = String(params.userId);
   }
 
-  payload.append('file', {
-    uri: params.uri,
-    name: params.fileName,
-    type: 'image/jpeg'
-  } as unknown as Blob);
+  if (Number.isFinite(Number(params.addressId))) {
+    payload.address_id = String(params.addressId);
+  }
 
   await httpClient.post('waypoint/photo', payload);
 }

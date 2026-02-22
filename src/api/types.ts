@@ -17,6 +17,7 @@ export interface Waypoint {
   id: number;
   route_id: number;
   address_id: number;
+  user_id?: number;
   seq_order: number;
   status: WaypointStatus;
   title?: string;

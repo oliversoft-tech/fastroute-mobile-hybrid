@@ -14,6 +14,7 @@ import {
 import { StackActions } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
@@ -165,11 +166,19 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
     try {
       setCameraBusy(true);
+      const imageBase64 = await FileSystem.readAsStringAsync(capturedPhotoUri, {
+        encoding: FileSystem.EncodingType.Base64
+      });
+      if (!imageBase64) {
+        throw new Error('Não foi possível converter a foto para base64.');
+      }
+
       await uploadWaypointPhoto({
         routeId,
         waypointId: waypoint.id,
+        userId: waypoint.user_id,
         addressId: waypoint.address_id,
-        uri: capturedPhotoUri,
+        imageBase64,
         fileName: capturedPhotoName
       });
 

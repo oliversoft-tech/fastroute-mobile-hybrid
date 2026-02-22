@@ -15,7 +15,7 @@ import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { listRoutes } from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
-import { Route } from '../api/types';
+import { RouteDetail } from '../api/types';
 import { StatusBadge } from '../components/StatusBadge';
 import { formatDate } from '../utils/date';
 import { PrimaryButton } from '../components/PrimaryButton';
@@ -25,7 +25,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Routes'>;
 
 export function RoutesScreen({ navigation }: Props) {
   const { userEmail, logout } = useAuth();
-  const [routes, setRoutes] = useState<Route[]>([]);
+  const [routes, setRoutes] = useState<RouteDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -122,7 +122,9 @@ export function RoutesScreen({ navigation }: Props) {
               </View>
               <View style={styles.routeTitleColumn}>
                 <Text style={styles.routeTitle}>Rota #{route.id}</Text>
-                <Text style={styles.routeMeta}>Criada em {formatDate(route.created_at)}</Text>
+                <Text style={styles.routeMeta}>
+                  {route.waypoints?.length ?? 0} waypoints • Criada em {formatDate(route.created_at)}
+                </Text>
               </View>
               <StatusBadge status={route.status} type="route" />
             </View>

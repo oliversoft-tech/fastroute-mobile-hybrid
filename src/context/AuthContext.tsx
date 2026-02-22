@@ -20,6 +20,7 @@ import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/aut
 
 interface AuthState {
   userEmail: string | null;
+  userId: string | null;
   authToken: string | null;
   isReady: boolean;
   login: (email: string, password: string) => Promise<void>;
@@ -30,14 +31,20 @@ const AuthContext = createContext<AuthState | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [authToken, setAuthTokenState] = useState<string | null>(null);
   const [refreshToken, setRefreshTokenState] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const userEmailRef = useRef<string | null>(null);
+  const userIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     userEmailRef.current = userEmail;
   }, [userEmail]);
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
   useEffect(() => {
     async function restoreSession() {
@@ -48,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         setUserEmail(session.email);
+        setUserId(session.userId ?? null);
         setAuthTokenState(session.token);
         setRefreshTokenState(session.refreshToken ?? null);
         setAuthSessionTokens(session.token, session.refreshToken ?? null);
@@ -64,9 +72,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await saveAuthSession({
       email,
       token: tokens.accessToken,
-      refreshToken: tokens.refreshToken
+      refreshToken: tokens.refreshToken,
+      userId: tokens.userId
     });
     setUserEmail(email);
+    setUserId(tokens.userId);
     setAuthTokenState(tokens.accessToken);
     setRefreshTokenState(tokens.refreshToken);
     setAuthSessionTokens(tokens.accessToken, tokens.refreshToken);
@@ -75,6 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     await clearAuthSession();
     setUserEmail(null);
+    setUserId(null);
     setAuthTokenState(null);
     setRefreshTokenState(null);
     setAuthSessionTokens(null, null);
@@ -87,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setOnSessionRefreshed(async (nextAccessToken, nextRefreshToken) => {
       const currentEmail = userEmailRef.current;
+      const currentUserId = userIdRef.current;
       if (!currentEmail) {
         return;
       }
@@ -96,7 +108,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await saveAuthSession({
         email: currentEmail,
         token: nextAccessToken,
-        refreshToken: nextRefreshToken
+        refreshToken: nextRefreshToken,
+        userId: currentUserId
       });
     });
     setTokenRefreshHandler((refreshToken) => refreshWithSupabase(refreshToken));
@@ -111,12 +124,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       userEmail,
+      userId,
       authToken,
       isReady,
       login,
       logout
     }),
-    [authToken, isReady, login, logout, refreshToken, userEmail]
+    [authToken, isReady, login, logout, refreshToken, userEmail, userId]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

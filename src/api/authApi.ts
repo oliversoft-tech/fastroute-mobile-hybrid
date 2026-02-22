@@ -13,11 +13,19 @@ interface LoginResponse {
     refresh_token?: string;
     refreshToken?: string;
   };
+  user_id?: string | number;
+  userId?: string | number;
+  user?: {
+    id?: string | number;
+    user_id?: string | number;
+    userId?: string | number;
+  };
 }
 
 export interface AuthTokens {
   accessToken: string;
   refreshToken: string | null;
+  userId: string | null;
 }
 
 function extractTokens(data: LoginResponse): AuthTokens {
@@ -36,7 +44,13 @@ function extractTokens(data: LoginResponse): AuthTokens {
   const refreshToken =
     data.refresh_token ?? data.refreshToken ?? data.session?.refresh_token ?? data.session?.refreshToken ?? null;
 
-  return { accessToken, refreshToken };
+  const userIdRaw = data.user_id ?? data.userId ?? data.user?.user_id ?? data.user?.userId ?? data.user?.id;
+  const userId =
+    userIdRaw === undefined || userIdRaw === null || String(userIdRaw).trim().length === 0
+      ? null
+      : String(userIdRaw);
+
+  return { accessToken, refreshToken, userId };
 }
 
 export async function loginRequest(email: string, password: string) {

@@ -14,25 +14,22 @@ import {
 import { StackActions } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import * as FileSystem from 'expo-file-system';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { StatusBadge } from '../components/StatusBadge';
 import { getWaypointMeta } from '../utils/waypointMeta';
 import { PrimaryButton } from '../components/PrimaryButton';
-import {
-  updateWaypointStatus,
-  uploadWaypointPhoto,
-  WaypointFinishStatus
-} from '../api/routesApi';
+import { updateWaypointStatus, WaypointFinishStatus } from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
+import { useAuth } from '../context/AuthContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Delivery'>;
 type FailureStatus = 'FALHA TEMPO ADVERSO' | 'FALHA MORADOR AUSENTE';
 
 export function DeliveryScreen({ route, navigation }: Props) {
   const { routeId, waypoint } = route.params;
+  const { userId } = useAuth();
   const [currentStatus, setCurrentStatus] = useState(waypoint.status);
   const [loading, setLoading] = useState(false);
   const [cameraBusy, setCameraBusy] = useState(false);
@@ -65,6 +62,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
     status: WaypointFinishStatus,
     options?: {
       obs_falha?: string;
+      file_name?: string;
+      user_id?: string | number;
       address_id?: number;
     }
   ) => {
@@ -164,38 +163,15 @@ export function DeliveryScreen({ route, navigation }: Props) {
       return;
     }
 
-    try {
-      setCameraBusy(true);
-      const imageBase64 = await FileSystem.readAsStringAsync(capturedPhotoUri, {
-        encoding: FileSystem.EncodingType.Base64
-      });
-      if (!imageBase64) {
-        throw new Error('Não foi possível converter a foto para base64.');
-      }
-
-      await uploadWaypointPhoto({
-        routeId,
-        waypointId: waypoint.id,
-        userId: waypoint.user_id,
-        addressId: waypoint.address_id,
-        imageBase64,
-        fileName: capturedPhotoName
-      });
-
-      setHasUploadedPhoto(true);
-      setUploadedPhotoName(capturedPhotoName);
-      setShowCameraModal(false);
-      setCapturedPhotoUri(null);
-      setCapturedPhotoName(null);
-      setFeedbackSuccess('Foto enviada com sucesso.');
-      Alert.alert('Foto enviada', 'Foto da entrega salva com sucesso.');
-    } catch (error) {
-      const message = getApiError(error);
-      setFeedbackError(message);
-      Alert.alert('Falha no envio da foto', message);
-    } finally {
-      setCameraBusy(false);
-    }
+    setCameraBusy(true);
+    setHasUploadedPhoto(true);
+    setUploadedPhotoName(capturedPhotoName);
+    setShowCameraModal(false);
+    setCapturedPhotoUri(null);
+    setCapturedPhotoName(null);
+    setFeedbackSuccess('Foto salva localmente. Será enviada ao confirmar o status.');
+    Alert.alert('Foto confirmada', 'Foto salva com sucesso.');
+    setCameraBusy(false);
   };
 
   const onConfirmDelivered = () => {
@@ -204,7 +180,12 @@ export function DeliveryScreen({ route, navigation }: Props) {
       return;
     }
 
-    finishWaypoint('ENTREGUE', { obs_falha: '', address_id: waypoint.address_id });
+    finishWaypoint('ENTREGUE', {
+      obs_falha: '',
+      file_name: uploadedPhotoName ?? '',
+      user_id: waypoint.user_id ?? userId ?? '',
+      address_id: waypoint.address_id
+    });
   };
 
   const onConfirmFailure = async () => {
@@ -213,6 +194,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
     setFailureObs('');
     await finishWaypoint(failureStatus, {
       obs_falha: obsFalha,
+      file_name: uploadedPhotoName ?? '',
+      user_id: waypoint.user_id ?? userId ?? '',
       address_id: waypoint.address_id
     });
   };
@@ -256,8 +239,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
         />
         <Text style={styles.photoStatus}>
           {hasUploadedPhoto
-            ? `Foto enviada: ${uploadedPhotoName ?? 'comprovante.jpg'}`
-            : 'Nenhuma foto enviada.'}
+            ? `Foto salva: ${uploadedPhotoName ?? 'comprovante.jpg'}`
+            : 'Nenhuma foto salva.'}
         </Text>
         {feedbackSuccess ? <Text style={styles.feedbackSuccess}>{feedbackSuccess}</Text> : null}
         {feedbackError ? <Text style={styles.feedbackError}>{feedbackError}</Text> : null}
@@ -377,7 +360,12 @@ export function DeliveryScreen({ route, navigation }: Props) {
                 variant="success"
                 onPress={() => {
                   setShowDeliveredConfirmModal(false);
-                  finishWaypoint('ENTREGUE', { obs_falha: '', address_id: waypoint.address_id });
+                  finishWaypoint('ENTREGUE', {
+                    obs_falha: '',
+                    file_name: uploadedPhotoName ?? '',
+                    user_id: waypoint.user_id ?? userId ?? '',
+                    address_id: waypoint.address_id
+                  });
                 }}
                 loading={loading}
                 style={styles.modalAction}

@@ -452,18 +452,22 @@ export async function updateWaypointStatus(
   status: WaypointFinishStatus,
   options?: {
     obs_falha?: string;
+    file_name?: string;
+    user_id?: string | number;
     address_id?: number;
   }
 ) {
-  void routeId;
   const mappedStatus = mapWaypointFinishStatus(status);
   const payload: Record<string, unknown> = {
-    waypoint_id: String(waypointId),
-    status: mappedStatus
+    waypoint_id: waypointId,
+    status: mappedStatus,
+    file_name: options?.file_name ?? '',
+    obs_falha: options?.obs_falha ?? '',
+    user_id: options?.user_id ?? '',
+    route_id: routeId
   };
 
   const obsFalha = options?.obs_falha ?? '';
-  payload.obs_falha = obsFalha;
 
   await httpClient.patch('waypoint/finish', payload);
 
@@ -478,33 +482,6 @@ export async function updateWaypointStatus(
     status: supabaseStatus,
     obsFalha: obsFalha.trim()
   });
-}
-
-export async function uploadWaypointPhoto(params: {
-  routeId: number;
-  waypointId: number;
-  userId?: number;
-  addressId?: number;
-  imageBase64: string;
-  fileName: string;
-}) {
-  const payload: Record<string, string> = {
-    route_id: String(params.routeId),
-    waypoint_id: String(params.waypointId),
-    file_name: params.fileName,
-    base_64: params.imageBase64,
-    image_base64: params.imageBase64
-  };
-
-  if (Number.isFinite(Number(params.userId))) {
-    payload.user_id = String(params.userId);
-  }
-
-  if (Number.isFinite(Number(params.addressId))) {
-    payload.address_id = String(params.addressId);
-  }
-
-  await httpClient.post('waypoint/photo', payload);
 }
 
 export async function updateWaypointOrder(waypointIds: number[]) {

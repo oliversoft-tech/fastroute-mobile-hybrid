@@ -199,8 +199,9 @@ function buildLeafletMapHtml(
 
       if (targetIndex !== fromIndex && minDistance <= 90) {
         const targetKey = points[targetIndex].pointKey;
-        const moved = points.splice(fromIndex, 1)[0];
-        points.splice(targetIndex, 0, moved);
+        const source = points[fromIndex];
+        points[fromIndex] = points[targetIndex];
+        points[targetIndex] = source;
         return { changed: true, targetKey };
       }
 

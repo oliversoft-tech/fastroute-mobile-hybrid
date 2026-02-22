@@ -1,6 +1,9 @@
 import { Route, RouteDetail, Waypoint, WaypointStatus } from './types';
 import { httpClient } from './httpClient';
-import { listRouteWaypointsFromSupabase } from './supabaseDataApi';
+import {
+  listRouteWaypointsFromSupabase,
+  updateRouteWaypointStatusInSupabase
+} from './supabaseDataApi';
 
 interface ApiObject {
   [key: string]: unknown;
@@ -417,17 +420,36 @@ function mapWaypointFinishStatus(status: WaypointFinishStatus) {
   return 'PENDENTE';
 }
 
+function mapWaypointStatusToSupabase(status: ReturnType<typeof mapWaypointFinishStatus>) {
+  if (status === 'ENTREGUE') {
+    return 'ENTREGUE' as const;
+  }
+
+  if (status === 'FALHA TEMPO ADVERSO' || status === 'FALHA MORADOR AUSENTE') {
+    return status;
+  }
+
+  if (status === 'PENDENTE') {
+    return 'PENDENTE' as const;
+  }
+
+  return null;
+}
+
 export async function updateWaypointStatus(
   routeId: number,
   waypointId: number,
   status: WaypointFinishStatus,
   options?: {
     obs_falha?: string;
+    address_id?: number;
   }
 ) {
+  void routeId;
+  const mappedStatus = mapWaypointFinishStatus(status);
   const payload: Record<string, unknown> = {
     waypoint_id: String(waypointId),
-    status: mapWaypointFinishStatus(status)
+    status: mappedStatus
   };
 
   const obsFalha = options?.obs_falha?.trim();
@@ -435,21 +457,44 @@ export async function updateWaypointStatus(
     payload.obs_falha = obsFalha;
   }
 
+  if (Number.isFinite(Number(options?.address_id))) {
+    payload.address_id = String(options?.address_id);
+  }
+
   await httpClient.patch('waypoint/finish', payload);
+
+  const supabaseStatus = mapWaypointStatusToSupabase(mappedStatus);
+  if (!supabaseStatus) {
+    return;
+  }
+
+  await updateRouteWaypointStatusInSupabase({
+    waypointId,
+    addressId: options?.address_id,
+    status: supabaseStatus,
+    obsFalha
+  });
 }
 
 export async function uploadDeliveryPhoto(params: {
   routeId: number;
   waypointId: number;
+  addressId?: number;
   imageBase64: string;
   fileName: string;
 }) {
-  await httpClient.post('delivery-photo', {
+  const payload: Record<string, unknown> = {
     route_id: params.routeId,
     waypoint_id: params.waypointId,
     image_base64: params.imageBase64,
     file_name: params.fileName
-  });
+  };
+
+  if (Number.isFinite(Number(params.addressId))) {
+    payload.address_id = params.addressId;
+  }
+
+  await httpClient.post('delivery-photo', payload);
 }
 
 export async function updateWaypointOrder(waypointIds: number[]) {

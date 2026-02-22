@@ -55,6 +55,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
     status: WaypointFinishStatus,
     options?: {
       obs_falha?: string;
+      address_id?: number;
     }
   ) => {
     try {
@@ -119,6 +120,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
       await uploadDeliveryPhoto({
         routeId,
         waypointId: waypoint.id,
+        addressId: waypoint.address_id,
         imageBase64: asset.base64,
         fileName
       });
@@ -142,7 +144,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
       return;
     }
 
-    finishWaypoint('CONCLUIDO');
+    finishWaypoint('CONCLUIDO', { address_id: waypoint.address_id });
   };
 
   const onConfirmFailure = async () => {
@@ -150,7 +152,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
     setShowFailureModal(false);
     setFailureObs('');
     await finishWaypoint(failureStatus, {
-      obs_falha: obsFalha
+      obs_falha: obsFalha,
+      address_id: waypoint.address_id
     });
   };
 
@@ -242,7 +245,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
                 variant="success"
                 onPress={() => {
                   setShowDeliveredConfirmModal(false);
-                  finishWaypoint('CONCLUIDO');
+                  finishWaypoint('CONCLUIDO', { address_id: waypoint.address_id });
                 }}
                 loading={loading}
                 style={styles.modalAction}

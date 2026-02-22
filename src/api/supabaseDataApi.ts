@@ -19,6 +19,8 @@ type AddressRow = {
   longitude: string | number | null;
 };
 
+type WaypointPersistStatus = 'PENDENTE' | 'ENTREGUE' | 'FALHA TEMPO ADVERSO' | 'FALHA MORADOR AUSENTE';
+
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
 function getSupabaseClient() {
@@ -117,4 +119,51 @@ export async function listRouteWaypointsFromSupabase(routeId: number): Promise<W
       longitude: toNumber(address?.longitude)
     };
   });
+}
+
+export async function updateRouteWaypointStatusInSupabase(params: {
+  waypointId: number;
+  addressId?: number;
+  status: WaypointPersistStatus;
+  obsFalha?: string;
+}) {
+  const supabase = getSupabaseClient();
+  const payload: Record<string, unknown> = {
+    status: params.status
+  };
+
+  const obsFalha = params.obsFalha?.trim();
+  if (obsFalha) {
+    payload.obs_falha = obsFalha;
+  }
+
+  const { data: updatedById, error: updateByIdError } = await supabase
+    .from('route_waypoints')
+    .update(payload as never)
+    .eq('id', params.waypointId)
+    .select('id')
+    .limit(1);
+
+  if (updateByIdError) {
+    throw updateByIdError;
+  }
+
+  if ((updatedById ?? []).length > 0) {
+    return;
+  }
+
+  if (!Number.isFinite(Number(params.addressId))) {
+    return;
+  }
+
+  const { error: updateByAddressError } = await supabase
+    .from('route_waypoints')
+    .update(payload as never)
+    .eq('address_id', Number(params.addressId))
+    .select('id')
+    .limit(1);
+
+  if (updateByAddressError) {
+    throw updateByAddressError;
+  }
 }

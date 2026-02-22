@@ -58,6 +58,9 @@ function buildLeafletMapHtml(
     const movedPointKeys = new Set();
     const map = L.map('map', { zoomControl: true, attributionControl: true });
     const markersLayer = L.layerGroup().addTo(map);
+    let routeBaseLayer = null;
+    let routeMainLayer = null;
+    let routeRequestCounter = 0;
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
@@ -66,6 +69,84 @@ function buildLeafletMapHtml(
 
     function emit(payload) {
       window.parent.postMessage({ source: 'fastroute-map', ...payload }, '*');
+    }
+
+    function clearRouteLayer() {
+      if (routeBaseLayer) {
+        map.removeLayer(routeBaseLayer);
+        routeBaseLayer = null;
+      }
+      if (routeMainLayer) {
+        map.removeLayer(routeMainLayer);
+        routeMainLayer = null;
+      }
+    }
+
+    function buildStraightRoute() {
+      return points.map((point) => [point.latitude, point.longitude]);
+    }
+
+    async function fetchRoadRoute() {
+      if (points.length < 2) {
+        return buildStraightRoute();
+      }
+
+      const coords = points.map((point) => point.longitude + ',' + point.latitude).join(';');
+      const url =
+        'https://router.project-osrm.org/route/v1/driving/' +
+        coords +
+        '?overview=full&geometries=geojson&alternatives=false&steps=false';
+
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error('route_fetch_failed');
+        }
+
+        const payload = await response.json();
+        const rawCoordinates = payload?.routes?.[0]?.geometry?.coordinates;
+        if (!Array.isArray(rawCoordinates) || rawCoordinates.length < 2) {
+          throw new Error('route_geometry_missing');
+        }
+
+        return rawCoordinates.map((coord) => [coord[1], coord[0]]);
+      } catch {
+        return buildStraightRoute();
+      }
+    }
+
+    async function drawRouteLine() {
+      const requestId = ++routeRequestCounter;
+      const latLngs = await fetchRoadRoute();
+
+      if (requestId !== routeRequestCounter) {
+        return;
+      }
+
+      clearRouteLayer();
+
+      if (!Array.isArray(latLngs) || latLngs.length < 2) {
+        return;
+      }
+
+      routeBaseLayer = L.polyline(latLngs, {
+        color: '#FFFFFF',
+        weight: 12,
+        opacity: 0.95,
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(map);
+
+      routeMainLayer = L.polyline(latLngs, {
+        color: '#2A6BFF',
+        weight: 7,
+        opacity: 0.98,
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(map);
+
+      routeBaseLayer.bringToBack();
+      routeMainLayer.bringToBack();
     }
 
     function createIcon(point, order, total) {
@@ -128,6 +209,7 @@ function buildLeafletMapHtml(
 
     function renderMap() {
       markersLayer.clearLayers();
+      drawRouteLine();
 
       points.forEach((point, index) => {
         const order = index + 1;

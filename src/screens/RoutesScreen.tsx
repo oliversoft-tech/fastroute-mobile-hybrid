@@ -117,9 +117,6 @@ export function RoutesScreen({ navigation }: Props) {
             onPress={() => navigation.navigate('RouteDetail', { routeId: route.id })}
           >
             <View style={styles.routeTitleRow}>
-              <View style={styles.idBubble}>
-                <Text style={styles.idBubbleText}>#{route.id}</Text>
-              </View>
               <View style={styles.routeTitleColumn}>
                 <Text style={styles.routeTitle}>Rota #{route.id}</Text>
                 <Text style={styles.routeMeta}>
@@ -260,18 +257,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10
-  },
-  idBubble: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    backgroundColor: colors.badgeBg,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  idBubbleText: {
-    color: colors.primary,
-    fontWeight: '800'
   },
   routeTitleColumn: {
     flex: 1

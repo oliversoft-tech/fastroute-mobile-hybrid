@@ -425,9 +425,9 @@ export async function updateWaypointStatus(
     obs_falha?: string;
   }
 ) {
-  void routeId;
   const payload: Record<string, unknown> = {
-    waypoint_id: waypointId,
+    route_id: String(routeId),
+    waypoint_id: String(waypointId),
     status: mapWaypointFinishStatus(status)
   };
 

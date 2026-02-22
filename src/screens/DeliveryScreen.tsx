@@ -348,7 +348,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
                   variant="primary"
                   onPress={onCapturePhoto}
                   loading={cameraBusy}
-                  disabled={!cameraReady}
+                  disabled={!cameraReady || cameraBusy}
                   style={styles.cameraActionButton}
                 />
               </View>
@@ -450,7 +450,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000'
   },
   cameraView: {
-    flex: 1
+    ...StyleSheet.absoluteFillObject
   },
   cameraActions: {
     position: 'absolute',
@@ -458,7 +458,9 @@ const styles = StyleSheet.create({
     right: 16,
     bottom: 24,
     flexDirection: 'row',
-    gap: 8
+    gap: 8,
+    zIndex: 20,
+    elevation: 20
   },
   cameraActionButton: {
     flex: 1

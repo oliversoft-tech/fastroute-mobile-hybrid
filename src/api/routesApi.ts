@@ -479,25 +479,29 @@ export async function updateWaypointStatus(
   });
 }
 
-export async function uploadDeliveryPhoto(params: {
+export async function uploadWaypointPhoto(params: {
   routeId: number;
   waypointId: number;
   addressId?: number;
-  imageBase64: string;
+  uri: string;
   fileName: string;
 }) {
-  const payload: Record<string, unknown> = {
-    route_id: params.routeId,
-    waypoint_id: params.waypointId,
-    image_base64: params.imageBase64,
-    file_name: params.fileName
-  };
+  const payload = new FormData();
+  payload.append('route_id', String(params.routeId));
+  payload.append('waypoint_id', String(params.waypointId));
+  payload.append('file_name', params.fileName);
 
   if (Number.isFinite(Number(params.addressId))) {
-    payload.address_id = params.addressId;
+    payload.append('address_id', String(params.addressId));
   }
 
-  await httpClient.post('delivery-photo', payload);
+  payload.append('file', {
+    uri: params.uri,
+    name: params.fileName,
+    type: 'image/jpeg'
+  } as unknown as Blob);
+
+  await httpClient.post('waypoint/photo', payload);
 }
 
 export async function updateWaypointOrder(waypointIds: number[]) {

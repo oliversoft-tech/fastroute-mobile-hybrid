@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert,
+  Image,
   Linking,
   Modal,
   Platform,
@@ -10,8 +11,9 @@ import {
   TextInput,
   View
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import { StackActions } from '@react-navigation/native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
@@ -20,7 +22,7 @@ import { getWaypointMeta } from '../utils/waypointMeta';
 import { PrimaryButton } from '../components/PrimaryButton';
 import {
   updateWaypointStatus,
-  uploadDeliveryPhoto,
+  uploadWaypointPhoto,
   WaypointFinishStatus
 } from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
@@ -35,12 +37,18 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [cameraBusy, setCameraBusy] = useState(false);
   const [hasUploadedPhoto, setHasUploadedPhoto] = useState(false);
   const [uploadedPhotoName, setUploadedPhotoName] = useState<string | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [capturedPhotoUri, setCapturedPhotoUri] = useState<string | null>(null);
+  const [capturedPhotoName, setCapturedPhotoName] = useState<string | null>(null);
   const [showFailureModal, setShowFailureModal] = useState(false);
   const [showDeliveredConfirmModal, setShowDeliveredConfirmModal] = useState(false);
   const [failureStatus, setFailureStatus] = useState<FailureStatus>('FALHA TEMPO ADVERSO');
   const [failureObs, setFailureObs] = useState('');
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
 
   const returnToRouteDetail = () => {
@@ -91,43 +99,85 @@ export function DeliveryScreen({ route, navigation }: Props) {
     }
 
     try {
-      setCameraBusy(true);
-      setFeedbackError(null);
-      setFeedbackSuccess(null);
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (permission.status !== 'granted') {
+      const permission = cameraPermission?.granted
+        ? cameraPermission
+        : await requestCameraPermission();
+      if (!permission.granted) {
         Alert.alert('Permissão necessária', 'Permita o uso da câmera para tirar a foto da entrega.');
         return;
       }
 
-      const captureResult = await ImagePicker.launchCameraAsync({
-        base64: true,
-        quality: 0.55,
-        allowsEditing: false,
-        mediaTypes: ImagePicker.MediaTypeOptions.Images
+      setFeedbackError(null);
+      setFeedbackSuccess(null);
+      setCapturedPhotoUri(null);
+      setCapturedPhotoName(null);
+      setCameraReady(false);
+      setShowCameraModal(true);
+    } catch (error) {
+      const message = getApiError(error);
+      setFeedbackError(message);
+      Alert.alert('Falha ao abrir câmera', message);
+    }
+  };
+
+  const onCapturePhoto = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Câmera indisponível', 'Não foi possível acessar a câmera neste momento.');
+      return;
+    }
+
+    try {
+      setCameraBusy(true);
+      const rawPhoto = await cameraRef.current.takePictureAsync({
+        quality: 0.6,
+        base64: false
       });
 
-      if (captureResult.canceled || captureResult.assets.length === 0) {
+      if (!rawPhoto?.uri) {
+        Alert.alert('Falha ao capturar', 'Não foi possível capturar a foto.');
         return;
       }
 
-      const asset = captureResult.assets[0];
-      if (!asset.base64 || asset.base64.length === 0) {
-        Alert.alert('Falha ao capturar', 'Não foi possível gerar a imagem para envio.');
-        return;
-      }
+      const normalizedPhoto = await manipulateAsync(
+        rawPhoto.uri,
+        [],
+        {
+          compress: 1,
+          format: SaveFormat.JPEG,
+          base64: false
+        }
+      );
 
       const fileName = `photo_${Date.now()}.jpg`;
-      await uploadDeliveryPhoto({
+      setCapturedPhotoUri(normalizedPhoto.uri);
+      setCapturedPhotoName(fileName);
+    } catch (error) {
+      Alert.alert('Falha ao capturar', getApiError(error));
+    } finally {
+      setCameraBusy(false);
+    }
+  };
+
+  const onConfirmPhoto = async () => {
+    if (!capturedPhotoUri || !capturedPhotoName) {
+      return;
+    }
+
+    try {
+      setCameraBusy(true);
+      await uploadWaypointPhoto({
         routeId,
         waypointId: waypoint.id,
         addressId: waypoint.address_id,
-        imageBase64: asset.base64,
-        fileName
+        uri: capturedPhotoUri,
+        fileName: capturedPhotoName
       });
 
       setHasUploadedPhoto(true);
-      setUploadedPhotoName(fileName);
+      setUploadedPhotoName(capturedPhotoName);
+      setShowCameraModal(false);
+      setCapturedPhotoUri(null);
+      setCapturedPhotoName(null);
       setFeedbackSuccess('Foto enviada com sucesso.');
       Alert.alert('Foto enviada', 'Foto da entrega salva com sucesso.');
     } catch (error) {
@@ -221,6 +271,78 @@ export function DeliveryScreen({ route, navigation }: Props) {
           style={styles.button}
         />
       </View>
+
+      <Modal
+        visible={showCameraModal}
+        animationType="slide"
+        onRequestClose={() => {
+          if (cameraBusy) {
+            return;
+          }
+          setShowCameraModal(false);
+          setCapturedPhotoUri(null);
+          setCapturedPhotoName(null);
+        }}
+      >
+        <View style={styles.cameraContainer}>
+          {capturedPhotoUri ? (
+            <Image source={{ uri: capturedPhotoUri }} style={styles.cameraView} resizeMode="cover" />
+          ) : (
+            <CameraView
+              ref={cameraRef}
+              style={styles.cameraView}
+              facing="back"
+              onCameraReady={() => setCameraReady(true)}
+            />
+          )}
+
+          <View style={styles.cameraActions}>
+            {capturedPhotoUri ? (
+              <>
+                <PrimaryButton
+                  label="Tirar outra"
+                  variant="neutral"
+                  onPress={() => {
+                    setCapturedPhotoUri(null);
+                    setCapturedPhotoName(null);
+                  }}
+                  disabled={cameraBusy}
+                  style={styles.cameraActionButton}
+                />
+                <PrimaryButton
+                  label="Confirmar foto"
+                  variant="primary"
+                  onPress={onConfirmPhoto}
+                  loading={cameraBusy}
+                  style={styles.cameraActionButton}
+                />
+              </>
+            ) : (
+              <>
+                <PrimaryButton
+                  label="Cancelar"
+                  variant="neutral"
+                  onPress={() => {
+                    setShowCameraModal(false);
+                    setCapturedPhotoUri(null);
+                    setCapturedPhotoName(null);
+                  }}
+                  disabled={cameraBusy}
+                  style={styles.cameraActionButton}
+                />
+                <PrimaryButton
+                  label="Capturar foto"
+                  variant="primary"
+                  onPress={onCapturePhoto}
+                  loading={cameraBusy}
+                  disabled={!cameraReady || cameraBusy}
+                  style={styles.cameraActionButton}
+                />
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         transparent
@@ -365,6 +487,26 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontSize: 12,
     fontWeight: '600'
+  },
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: '#000'
+  },
+  cameraView: {
+    ...StyleSheet.absoluteFillObject
+  },
+  cameraActions: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 24,
+    flexDirection: 'row',
+    gap: 8,
+    zIndex: 20,
+    elevation: 20
+  },
+  cameraActionButton: {
+    flex: 1
   },
   modalOverlay: {
     flex: 1,

@@ -130,7 +130,7 @@ function buildLeafletMapHtml(
       }
 
       routeBaseLayer = L.polyline(latLngs, {
-        color: '#FFFFFF',
+        color: '#E9D5FF',
         weight: 12,
         opacity: 0.95,
         lineCap: 'round',
@@ -138,7 +138,7 @@ function buildLeafletMapHtml(
       }).addTo(map);
 
       routeMainLayer = L.polyline(latLngs, {
-        color: '#2A6BFF',
+        color: '#7E22CE',
         weight: 7,
         opacity: 0.98,
         lineCap: 'round',

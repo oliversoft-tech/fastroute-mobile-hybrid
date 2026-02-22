@@ -63,7 +63,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
       setFeedbackError(null);
       setFeedbackSuccess(null);
       await updateWaypointStatus(routeId, waypoint.id, status, options);
-      if (status === 'CONCLUIDO') {
+      if (status === 'CONCLUIDO' || status === 'ENTREGUE') {
         setCurrentStatus('CONCLUIDO');
       }
       setFeedbackSuccess('Status atualizado com sucesso.');
@@ -144,7 +144,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
       return;
     }
 
-    finishWaypoint('CONCLUIDO', { address_id: waypoint.address_id });
+    finishWaypoint('ENTREGUE', { obs_falha: '', address_id: waypoint.address_id });
   };
 
   const onConfirmFailure = async () => {
@@ -245,7 +245,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
                 variant="success"
                 onPress={() => {
                   setShowDeliveredConfirmModal(false);
-                  finishWaypoint('CONCLUIDO', { address_id: waypoint.address_id });
+                  finishWaypoint('ENTREGUE', { obs_falha: '', address_id: waypoint.address_id });
                 }}
                 loading={loading}
                 style={styles.modalAction}

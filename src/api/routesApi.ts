@@ -397,11 +397,12 @@ export async function finishRoute(routeId: number) {
 
 export type WaypointFinishStatus =
   | WaypointStatus
+  | 'ENTREGUE'
   | 'FALHA TEMPO ADVERSO'
   | 'FALHA MORADOR AUSENTE';
 
 function mapWaypointFinishStatus(status: WaypointFinishStatus) {
-  if (status === 'CONCLUIDO') {
+  if (status === 'CONCLUIDO' || status === 'ENTREGUE') {
     return 'ENTREGUE';
   }
 
@@ -452,14 +453,8 @@ export async function updateWaypointStatus(
     status: mappedStatus
   };
 
-  const obsFalha = options?.obs_falha?.trim();
-  if (obsFalha) {
-    payload.obs_falha = obsFalha;
-  }
-
-  if (Number.isFinite(Number(options?.address_id))) {
-    payload.address_id = String(options?.address_id);
-  }
+  const obsFalha = options?.obs_falha ?? '';
+  payload.obs_falha = obsFalha;
 
   await httpClient.patch('waypoint/finish', payload);
 
@@ -472,7 +467,7 @@ export async function updateWaypointStatus(
     waypointId,
     addressId: options?.address_id,
     status: supabaseStatus,
-    obsFalha
+    obsFalha: obsFalha.trim()
   });
 }
 

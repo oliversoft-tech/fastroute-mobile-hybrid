@@ -55,7 +55,6 @@ function buildLeafletMapHtml(
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const points = ${payload};
-    const originalOrder = new Map(points.map((point, index) => [point.pointKey, index + 1]));
     const movedPointKeys = new Set();
     const map = L.map('map', { zoomControl: true, attributionControl: true });
     const markersLayer = L.layerGroup().addTo(map);
@@ -98,7 +97,7 @@ function buildLeafletMapHtml(
     function reorder(draggedKey, droppedLatLng) {
       const fromIndex = points.findIndex((point) => point.pointKey === draggedKey);
       if (fromIndex < 0) {
-        return false;
+        return { changed: false, targetKey: null };
       }
 
       const droppedPoint = map.latLngToContainerPoint(droppedLatLng);
@@ -118,12 +117,13 @@ function buildLeafletMapHtml(
       });
 
       if (targetIndex !== fromIndex && minDistance <= 90) {
+        const targetKey = points[targetIndex].pointKey;
         const moved = points.splice(fromIndex, 1)[0];
         points.splice(targetIndex, 0, moved);
-        return true;
+        return { changed: true, targetKey };
       }
 
-      return false;
+      return { changed: false, targetKey: null };
     }
 
     function renderMap() {
@@ -142,15 +142,12 @@ function buildLeafletMapHtml(
         }).addTo(markersLayer);
 
         marker.on('dragend', (event) => {
-          const changed = reorder(point.pointKey, event.target.getLatLng());
+          const result = reorder(point.pointKey, event.target.getLatLng());
+          const changed = result.changed;
           if (changed) {
-            const currentIndex = points.findIndex((entry) => entry.pointKey === point.pointKey);
-            const currentOrder = currentIndex + 1;
-            const original = originalOrder.get(point.pointKey);
-            if (original === currentOrder) {
-              movedPointKeys.delete(point.pointKey);
-            } else {
-              movedPointKeys.add(point.pointKey);
+            movedPointKeys.add(point.pointKey);
+            if (result.targetKey) {
+              movedPointKeys.add(result.targetKey);
             }
           }
           renderMap();

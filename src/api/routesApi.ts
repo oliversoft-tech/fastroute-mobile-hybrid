@@ -1,6 +1,7 @@
 import { Route, RouteDetail, Waypoint, WaypointStatus } from './types';
 import { httpClient } from './httpClient';
 import {
+  enrichWaypointsWithAddressData,
   listRouteWaypointsFromSupabase,
   updateRouteWaypointStatusInSupabase
 } from './supabaseDataApi';
@@ -375,7 +376,11 @@ export async function getRouteDetails(routeId: number) {
     };
   }
 
-  return route;
+  const enrichedWaypoints = await enrichWaypointsWithAddressData(route.waypoints ?? []);
+  return {
+    ...route,
+    waypoints: enrichedWaypoints
+  };
 }
 
 export async function listRouteWaypoints(routeId: number) {
@@ -389,7 +394,7 @@ export async function listRouteWaypoints(routeId: number) {
   }
 
   const route = await getRouteDetails(routeId);
-  return route.waypoints ?? [];
+  return enrichWaypointsWithAddressData(route.waypoints ?? []);
 }
 
 export async function startRoute(routeId: number) {

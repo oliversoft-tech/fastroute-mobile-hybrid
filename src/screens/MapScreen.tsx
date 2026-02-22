@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { getWaypointMeta } from '../utils/waypointMeta';
 import { updateWaypointOrder } from '../api/routesApi';
-import { Waypoint } from '../api/types';
 import { getApiError } from '../api/httpClient';
 import { PrimaryButton } from '../components/PrimaryButton';
 
@@ -67,7 +67,14 @@ function buildLeafletMapHtml(
     }).addTo(map);
 
     function emit(payload) {
-      window.parent.postMessage({ source: 'fastroute-map', ...payload }, '*');
+      const message = { source: 'fastroute-map', ...payload };
+      if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+        window.ReactNativeWebView.postMessage(JSON.stringify(message));
+        return;
+      }
+      if (window.parent && typeof window.parent.postMessage === 'function') {
+        window.parent.postMessage(message, '*');
+      }
     }
 
     function clearRouteLayer() {
@@ -278,7 +285,6 @@ export function MapScreen({ route, navigation }: Props) {
   const [movedWaypointIds, setMovedWaypointIds] = useState<number[]>([]);
   const [confirmDisabled, setConfirmDisabled] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [mapLoadError, setMapLoadError] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
   const initialWaypoints = useMemo(() => [...waypoints].sort((a, b) => a.seq_order - b.seq_order), [waypoints]);
 
@@ -305,33 +311,45 @@ export function MapScreen({ route, navigation }: Props) {
     setConfirmDisabled(true);
   }, [initialPoints]);
 
-  const pointsByKey = useMemo(
-    () => new Map(initialPoints.map((point) => [point.pointKey, point])),
-    [initialPoints]
-  );
-
-  const orderedPoints = useMemo(() => {
-    if (orderedPointKeys.length === 0) {
-      return initialPoints;
+  const handleMapPayload = useCallback((payload: Record<string, unknown> | null) => {
+    if (!payload || payload.source !== 'fastroute-map') {
+      return;
     }
 
-    const usedKeys = new Set<string>();
-    const reordered = orderedPointKeys
-      .map((pointKey) => pointsByKey.get(pointKey))
-      .filter((point): point is (typeof initialPoints)[number] => Boolean(point))
-      .map((point) => {
-        usedKeys.add(point.pointKey);
-        return point;
-      });
-
-    for (const point of initialPoints) {
-      if (!usedKeys.has(point.pointKey)) {
-        reordered.push(point);
+    if (payload.type === 'reorder' && Array.isArray(payload.order)) {
+      const orderKeys = payload.order.map((entry) => String(entry));
+      setOrderedPointKeys(orderKeys);
+      if (Array.isArray(payload.movedWaypointIds)) {
+        const changedIds = [...new Set(
+          payload.movedWaypointIds
+            .map((entry) => Number(entry))
+            .filter((entry) => Number.isFinite(entry))
+        )];
+        setMovedWaypointIds(changedIds);
+        setConfirmDisabled(changedIds.length === 0);
       }
     }
 
-    return reordered;
-  }, [initialPoints, orderedPointKeys, pointsByKey]);
+    if (payload.type === 'waypoint_dblclick') {
+      const waypointId = Number(payload.waypointId);
+      const order = Number(payload.order);
+      const pointType = String(payload.pointType ?? '').trim();
+      const wasReordered = Boolean(payload.wasReordered);
+      const title = String(payload.title ?? '').trim();
+      const subtitle = String(payload.subtitle ?? '').trim();
+
+      if (Number.isFinite(waypointId)) {
+        setBadge({
+          waypointId,
+          order: Number.isFinite(order) ? order : 0,
+          pointType: pointType || undefined,
+          wasReordered,
+          title: title || 'Waypoint',
+          subtitle: subtitle || undefined
+        });
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -356,44 +374,7 @@ export function MapScreen({ route, navigation }: Props) {
               }
             })()
           : (raw as Record<string, unknown> | null);
-
-      if (!payload || payload.source !== 'fastroute-map') {
-        return;
-      }
-
-      if (payload.type === 'reorder' && Array.isArray(payload.order)) {
-        const orderKeys = payload.order.map((entry) => String(entry));
-        setOrderedPointKeys(orderKeys);
-        if (Array.isArray(payload.movedWaypointIds)) {
-          const changedIds = [...new Set(
-            payload.movedWaypointIds
-              .map((entry) => Number(entry))
-              .filter((entry) => Number.isFinite(entry))
-          )];
-          setMovedWaypointIds(changedIds);
-          setConfirmDisabled(changedIds.length === 0);
-        }
-      }
-
-      if (payload.type === 'waypoint_dblclick') {
-        const waypointId = Number(payload.waypointId);
-        const order = Number(payload.order);
-        const pointType = String(payload.pointType ?? '').trim();
-        const wasReordered = Boolean(payload.wasReordered);
-        const title = String(payload.title ?? '').trim();
-        const subtitle = String(payload.subtitle ?? '').trim();
-
-        if (Number.isFinite(waypointId)) {
-          setBadge({
-            waypointId,
-            order: Number.isFinite(order) ? order : 0,
-            pointType: pointType || undefined,
-            wasReordered,
-            title: title || 'Waypoint',
-            subtitle: subtitle || undefined
-          });
-        }
-      }
+      handleMapPayload(payload);
     };
 
     browser.addEventListener?.('message', onMessage);
@@ -401,7 +382,7 @@ export function MapScreen({ route, navigation }: Props) {
     return () => {
       browser.removeEventListener?.('message', onMessage);
     };
-  }, []);
+  }, [handleMapPayload]);
 
   useEffect(() => {
     if (!badge) {
@@ -416,14 +397,6 @@ export function MapScreen({ route, navigation }: Props) {
   }, [badge]);
 
   const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
-
-  const nativeMapUrl = useMemo(() => {
-    const initial = orderedPoints[0] ?? { latitude: 40.211, longitude: -8.429 };
-    const markers = orderedPoints
-      .map((point) => `${point.latitude},${point.longitude},lightblue1`)
-      .join('|');
-    return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
-  }, [orderedPoints]);
 
   const onConfirmOrder = async () => {
     setConfirmDisabled(true);
@@ -452,19 +425,27 @@ export function MapScreen({ route, navigation }: Props) {
         {Platform.OS === 'web' ? (
           <WebIFrame srcDoc={webMapHtml} style={styles.webFrame} title="Mapa da rota" />
         ) : (
-          <Image
-            source={{ uri: nativeMapUrl }}
-            style={styles.nativeMapImage}
-            resizeMode="cover"
-            onError={() => setMapLoadError(true)}
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: webMapHtml }}
+            style={styles.webFrame}
+            javaScriptEnabled
+            domStorageEnabled
+            onMessage={(event) => {
+              const raw = event.nativeEvent.data;
+              if (typeof raw !== 'string' || raw.trim().length === 0) {
+                return;
+              }
+
+              try {
+                const payload = JSON.parse(raw) as Record<string, unknown>;
+                handleMapPayload(payload);
+              } catch {
+                // ignora mensagens inválidas
+              }
+            }}
           />
         )}
-
-        {Platform.OS !== 'web' && mapLoadError ? (
-          <View style={styles.mapFallbackOverlay}>
-            <Text style={styles.mapFallbackText}>Mapa indisponível neste dispositivo.</Text>
-          </View>
-        ) : null}
       </View>
 
       <View style={styles.routeHeader}>
@@ -513,25 +494,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderWidth: 0
-  },
-  nativeMapImage: {
-    width: '100%',
-    height: '100%'
-  },
-  mapFallbackOverlay: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(11, 24, 50, 0.45)',
-    padding: 16
-  },
-  mapFallbackText: {
-    color: '#fff',
-    fontWeight: '700'
   },
   routeHeader: {
     position: 'absolute',

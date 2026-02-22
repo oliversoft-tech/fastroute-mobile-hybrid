@@ -74,6 +74,37 @@ function mapWaypointStatus(value: unknown): WaypointStatus {
   return 'PENDENTE';
 }
 
+function buildAddressTitle(address?: AddressRow) {
+  return address?.detailed_address?.trim() || 'Endereço não informado';
+}
+
+function buildAddressSubtitle(address?: AddressRow) {
+  return [address?.zipcode?.trim(), address?.city?.trim()].filter(Boolean).join(' - ') || undefined;
+}
+
+async function loadAddressesByIds(addressIds: number[]) {
+  if (addressIds.length === 0) {
+    return new Map<number, AddressRow>();
+  }
+
+  const supabase = getSupabaseClient();
+  const { data: addressRows, error: addressError } = await supabase
+    .from('addresses')
+    .select('id, detailed_address, zipcode, city, lat, longitude')
+    .in('id', addressIds);
+
+  if (addressError) {
+    throw addressError;
+  }
+
+  const addressMap = new Map<number, AddressRow>();
+  for (const address of (addressRows ?? []) as AddressRow[]) {
+    addressMap.set(address.id, address);
+  }
+
+  return addressMap;
+}
+
 export async function listRouteWaypointsFromSupabase(routeId: number): Promise<Waypoint[]> {
   const supabase = getSupabaseClient();
 
@@ -96,24 +127,10 @@ export async function listRouteWaypointsFromSupabase(routeId: number): Promise<W
   }
 
   const addressIds = [...new Set(normalizedWaypoints.map((row) => row.address_id))];
-  const { data: addressRows, error: addressError } = await supabase
-    .from('addresses')
-    .select('id, detailed_address, zipcode, city, lat, longitude')
-    .in('id', addressIds);
-
-  if (addressError) {
-    throw addressError;
-  }
-
-  const addressMap = new Map<number, AddressRow>();
-  for (const address of (addressRows ?? []) as AddressRow[]) {
-    addressMap.set(address.id, address);
-  }
+  const addressMap = await loadAddressesByIds(addressIds);
 
   return normalizedWaypoints.map((row) => {
     const address = addressMap.get(row.address_id);
-    const title = address?.detailed_address?.trim() || 'Endereço não informado';
-    const subtitle = [address?.zipcode?.trim(), address?.city?.trim()].filter(Boolean).join(' - ');
 
     return {
       id: Number(row.id),
@@ -121,10 +138,43 @@ export async function listRouteWaypointsFromSupabase(routeId: number): Promise<W
       address_id: Number(row.address_id),
       seq_order: Number(row.seq_order),
       status: mapWaypointStatus(row.status),
-      title,
-      subtitle: subtitle || undefined,
+      title: buildAddressTitle(address),
+      subtitle: buildAddressSubtitle(address),
       latitude: toNumber(address?.lat),
       longitude: toNumber(address?.longitude)
+    };
+  });
+}
+
+export async function enrichWaypointsWithAddressData(waypoints: Waypoint[]): Promise<Waypoint[]> {
+  const normalizedWaypoints = waypoints.filter(
+    (waypoint) => Number.isFinite(Number(waypoint.id)) && Number.isFinite(Number(waypoint.address_id))
+  );
+
+  if (normalizedWaypoints.length === 0) {
+    return waypoints;
+  }
+
+  const addressIds = [...new Set(normalizedWaypoints.map((waypoint) => Number(waypoint.address_id)))];
+  const addressMap = await loadAddressesByIds(addressIds);
+
+  return waypoints.map((waypoint) => {
+    const address = addressMap.get(Number(waypoint.address_id));
+    if (!address) {
+      return waypoint;
+    }
+
+    const hasValidTitle =
+      typeof waypoint.title === 'string' &&
+      waypoint.title.trim().length > 0 &&
+      waypoint.title.trim().toLowerCase() !== 'endereço não informado';
+
+    return {
+      ...waypoint,
+      title: hasValidTitle ? waypoint.title : buildAddressTitle(address),
+      subtitle: waypoint.subtitle?.trim()?.length ? waypoint.subtitle : buildAddressSubtitle(address),
+      latitude: typeof waypoint.latitude === 'number' ? waypoint.latitude : toNumber(address.lat),
+      longitude: typeof waypoint.longitude === 'number' ? waypoint.longitude : toNumber(address.longitude)
     };
   });
 }

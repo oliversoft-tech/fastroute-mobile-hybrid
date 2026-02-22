@@ -1,4 +1,6 @@
-import axios, { AxiosHeaders } from 'axios';
+type AxiosStatic = typeof import('axios')['default'];
+const axiosRuntime = require('axios/dist/browser/axios.cjs');
+const axios = (axiosRuntime.default ?? axiosRuntime) as AxiosStatic;
 import { API_BASE_URL as configuredBaseUrl } from '../config/api';
 
 const API_BASE_URL = configuredBaseUrl.endsWith('/')
@@ -38,9 +40,13 @@ function isAuthRequest(url: string) {
 }
 
 function applyBearerHeader(headers: unknown, accessToken: string) {
-  const nextHeaders = AxiosHeaders.from((headers ?? {}) as AxiosHeaders);
-  nextHeaders.set('Authorization', `Bearer ${accessToken}`);
-  return nextHeaders;
+  const baseHeaders =
+    headers && typeof headers === 'object' ? (headers as Record<string, unknown>) : {};
+
+  return {
+    ...baseHeaders,
+    Authorization: `Bearer ${accessToken}`
+  };
 }
 
 async function refreshAccessToken() {
@@ -67,7 +73,7 @@ httpClient.interceptors.request.use((config) => {
   const authRequest = isAuthRequest(requestUrl);
 
   if (currentAccessKey && !authRequest) {
-    config.headers = applyBearerHeader(config.headers, currentAccessKey);
+    config.headers = applyBearerHeader(config.headers, currentAccessKey) as any;
   }
 
   return config;
@@ -107,7 +113,7 @@ httpClient.interceptors.response.use(
         throw new Error('Sessão expirada.');
       }
 
-      originalConfig.headers = applyBearerHeader(originalConfig.headers, renewedAccessToken);
+      originalConfig.headers = applyBearerHeader(originalConfig.headers, renewedAccessToken) as any;
       return httpClient(originalConfig);
     } catch (refreshError) {
       setAuthSessionTokens(null, null);

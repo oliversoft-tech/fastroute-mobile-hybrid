@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import {
   Alert,
+  Image,
   Linking,
   Modal,
   ScrollView,
@@ -34,6 +35,12 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [uploadedPhotoName, setUploadedPhotoName] = useState<string | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [cameraBusy, setCameraBusy] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [capturedPhoto, setCapturedPhoto] = useState<{
+    uri: string;
+    base64: string;
+    fileName: string;
+  } | null>(null);
   const [showFailureModal, setShowFailureModal] = useState(false);
   const [failureStatus, setFailureStatus] = useState<FailureStatus>('FALHA TEMPO ADVERSO');
   const [failureObs, setFailureObs] = useState('');
@@ -79,13 +86,15 @@ export function DeliveryScreen({ route, navigation }: Props) {
         Alert.alert('Permissão necessária', 'Permita o uso da câmera para tirar a foto da entrega.');
         return;
       }
+      setCapturedPhoto(null);
+      setCameraReady(false);
       setShowCameraModal(true);
     } catch (error) {
       Alert.alert('Falha ao abrir câmera', getApiError(error));
     }
   };
 
-  const onCaptureAndUploadPhoto = async () => {
+  const onCapturePhoto = async () => {
     if (!cameraRef.current) {
       Alert.alert('Câmera indisponível', 'Não foi possível acessar a câmera neste momento.');
       return;
@@ -98,22 +107,41 @@ export function DeliveryScreen({ route, navigation }: Props) {
         quality: 0.75
       });
 
-      const base64 = picture?.base64;
-      if (!base64) {
+      if (!picture?.base64 || !picture?.uri) {
         Alert.alert('Falha ao capturar', 'Não foi possível obter a imagem da câmera.');
         return;
       }
 
       const fileName = `photo_${Date.now()}.jpg`;
+      setCapturedPhoto({
+        uri: picture.uri,
+        base64: picture.base64,
+        fileName
+      });
+    } catch (error) {
+      Alert.alert('Falha ao capturar', getApiError(error));
+    } finally {
+      setCameraBusy(false);
+    }
+  };
+
+  const onConfirmCapturedPhoto = async () => {
+    if (!capturedPhoto) {
+      return;
+    }
+
+    try {
+      setCameraBusy(true);
       await uploadDeliveryPhoto({
         routeId,
         waypointId: waypoint.id,
-        imageBase64: base64,
-        fileName
+        imageBase64: capturedPhoto.base64,
+        fileName: capturedPhoto.fileName
       });
 
       setHasUploadedPhoto(true);
-      setUploadedPhotoName(fileName);
+      setUploadedPhotoName(capturedPhoto.fileName);
+      setCapturedPhoto(null);
       setShowCameraModal(false);
       Alert.alert('Foto enviada', 'Foto da entrega salva com sucesso.');
     } catch (error) {
@@ -271,25 +299,61 @@ export function DeliveryScreen({ route, navigation }: Props) {
       <Modal
         visible={showCameraModal}
         animationType="slide"
-        onRequestClose={() => setShowCameraModal(false)}
+        onRequestClose={() => {
+          setShowCameraModal(false);
+          setCapturedPhoto(null);
+        }}
       >
         <View style={styles.cameraContainer}>
-          <CameraView ref={cameraRef} style={styles.cameraView} facing="back" />
-          <View style={styles.cameraActions}>
-            <PrimaryButton
-              label="Cancelar"
-              variant="neutral"
-              onPress={() => setShowCameraModal(false)}
-              style={styles.cameraActionButton}
-            />
-            <PrimaryButton
-              label="Capturar foto"
-              variant="primary"
-              onPress={onCaptureAndUploadPhoto}
-              loading={cameraBusy}
-              style={styles.cameraActionButton}
-            />
-          </View>
+          {capturedPhoto ? (
+            <>
+              <Image source={{ uri: capturedPhoto.uri }} style={styles.cameraView} resizeMode="cover" />
+              <View style={styles.cameraActions}>
+                <PrimaryButton
+                  label="Tirar outra"
+                  variant="neutral"
+                  onPress={() => setCapturedPhoto(null)}
+                  disabled={cameraBusy}
+                  style={styles.cameraActionButton}
+                />
+                <PrimaryButton
+                  label="Confirmar foto"
+                  variant="primary"
+                  onPress={onConfirmCapturedPhoto}
+                  loading={cameraBusy}
+                  style={styles.cameraActionButton}
+                />
+              </View>
+            </>
+          ) : (
+            <>
+              <CameraView
+                ref={cameraRef}
+                style={styles.cameraView}
+                facing="back"
+                onCameraReady={() => setCameraReady(true)}
+              />
+              <View style={styles.cameraActions}>
+                <PrimaryButton
+                  label="Cancelar"
+                  variant="neutral"
+                  onPress={() => {
+                    setShowCameraModal(false);
+                    setCapturedPhoto(null);
+                  }}
+                  style={styles.cameraActionButton}
+                />
+                <PrimaryButton
+                  label="Capturar foto"
+                  variant="primary"
+                  onPress={onCapturePhoto}
+                  loading={cameraBusy}
+                  disabled={!cameraReady}
+                  style={styles.cameraActionButton}
+                />
+              </View>
+            </>
+          )}
         </View>
       </Modal>
     </ScrollView>

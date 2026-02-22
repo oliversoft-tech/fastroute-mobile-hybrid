@@ -23,13 +23,17 @@ export function ImportRouteScreen({ navigation }: Props) {
   const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
-  const [recentFiles, setRecentFiles] = useState<
-    Array<{ name: string; sizeKb: number; type: string }>
-  >([
-    { name: 'rota_norte_v2.csv', sizeKb: 2410, type: 'CSV' },
-    { name: 'export_centro_log.json', sizeKb: 659, type: 'JSON' },
-    { name: 'rota_sul_backup.csv', sizeKb: 1230, type: 'CSV' }
-  ]);
+  const [recentFiles, setRecentFiles] = useState<Array<{ name: string; sizeKb: number; type: string }>>([]);
+
+  const toRecentFileEntry = (file: DocumentPicker.DocumentPickerAsset) => ({
+    name: file.name,
+    sizeKb: Math.round((file.size ?? 0) / 1024),
+    type: file.mimeType?.includes('json')
+      ? 'JSON'
+      : file.mimeType?.includes('sheet') || file.mimeType?.includes('excel')
+        ? 'XLSX'
+        : 'CSV'
+  });
 
   const pickFile = async () => {
     const response = await DocumentPicker.getDocumentAsync({
@@ -46,18 +50,6 @@ export function ImportRouteScreen({ navigation }: Props) {
       const file = response.assets[0];
       setSelectedFile(file);
       setResult(null);
-      setRecentFiles((prev) => [
-        {
-          name: file.name,
-          sizeKb: Math.round((file.size ?? 0) / 1024),
-          type: file.mimeType?.includes('json')
-            ? 'JSON'
-            : file.mimeType?.includes('sheet') || file.mimeType?.includes('excel')
-              ? 'XLSX'
-              : 'CSV'
-        },
-        ...prev.filter((entry) => entry.name !== file.name)
-      ].slice(0, 5));
     }
   };
 
@@ -103,6 +95,8 @@ export function ImportRouteScreen({ navigation }: Props) {
         webFile: (selectedFile as DocumentPicker.DocumentPickerAsset & { file?: Blob }).file
       });
       setResult(payload);
+      const importedEntry = toRecentFileEntry(selectedFile);
+      setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
       const routeId = await resolveCreatedRouteId(payload);
       if (!routeId) {

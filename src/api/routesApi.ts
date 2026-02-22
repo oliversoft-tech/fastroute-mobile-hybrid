@@ -392,7 +392,12 @@ export async function finishRoute(routeId: number) {
   });
 }
 
-function mapWaypointFinishStatus(status: WaypointStatus) {
+export type WaypointFinishStatus =
+  | WaypointStatus
+  | 'FALHA TEMPO ADVERSO'
+  | 'FALHA MORADOR AUSENTE';
+
+function mapWaypointFinishStatus(status: WaypointFinishStatus) {
   if (status === 'CONCLUIDO') {
     return 'ENTREGUE';
   }
@@ -401,19 +406,37 @@ function mapWaypointFinishStatus(status: WaypointStatus) {
     return 'EM_ROTA';
   }
 
+  if (status === 'PENDENTE') {
+    return 'PENDENTE';
+  }
+
+  if (status === 'FALHA TEMPO ADVERSO' || status === 'FALHA MORADOR AUSENTE') {
+    return status;
+  }
+
   return 'PENDENTE';
 }
 
 export async function updateWaypointStatus(
   routeId: number,
   waypointId: number,
-  status: WaypointStatus
+  status: WaypointFinishStatus,
+  options?: {
+    obs_falha?: string;
+  }
 ) {
   void routeId;
-  await httpClient.patch('waypoint/finish', {
-    waypoint_id: String(waypointId),
+  const payload: Record<string, unknown> = {
+    waypoint_id: waypointId,
     status: mapWaypointFinishStatus(status)
-  });
+  };
+
+  const obsFalha = options?.obs_falha?.trim();
+  if (obsFalha) {
+    payload.obs_falha = obsFalha;
+  }
+
+  await httpClient.patch('waypoint/finish', payload);
 }
 
 export async function updateWaypointOrder(waypointIds: number[]) {

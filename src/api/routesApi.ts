@@ -426,7 +426,6 @@ export async function updateWaypointStatus(
   }
 ) {
   const payload: Record<string, unknown> = {
-    route_id: String(routeId),
     waypoint_id: String(waypointId),
     status: mapWaypointFinishStatus(status)
   };

@@ -153,7 +153,7 @@ export function setTokenRefreshHandler(
 export function getApiError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const responseData = error.response?.data;
-    const message = responseData?.message;
+    const message = responseData?.message ?? responseData?.msg ?? responseData?.error;
     const hint = responseData?.hint;
     if (typeof message === 'string' && message.length > 0) {
       if (typeof hint === 'string' && hint.length > 0) {

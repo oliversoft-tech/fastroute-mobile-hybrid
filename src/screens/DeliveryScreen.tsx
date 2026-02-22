@@ -1,7 +1,6 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   Alert,
-  Image,
   Linking,
   Modal,
   ScrollView,
@@ -10,7 +9,7 @@ import {
   TextInput,
   View
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
@@ -31,21 +30,12 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const { routeId, waypoint } = route.params;
   const [currentStatus, setCurrentStatus] = useState(waypoint.status);
   const [loading, setLoading] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
   const [hasUploadedPhoto, setHasUploadedPhoto] = useState(false);
   const [uploadedPhotoName, setUploadedPhotoName] = useState<string | null>(null);
-  const [showCameraModal, setShowCameraModal] = useState(false);
-  const [cameraBusy, setCameraBusy] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
-  const [capturedPhoto, setCapturedPhoto] = useState<{
-    uri: string;
-    base64: string;
-    fileName: string;
-  } | null>(null);
   const [showFailureModal, setShowFailureModal] = useState(false);
   const [failureStatus, setFailureStatus] = useState<FailureStatus>('FALHA TEMPO ADVERSO');
   const [failureObs, setFailureObs] = useState('');
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
 
   const returnToRouteDetail = () => {
@@ -79,70 +69,40 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
   const onTakePhoto = async () => {
     try {
-      const permission = cameraPermission?.granted
-        ? cameraPermission
-        : await requestCameraPermission();
-      if (!permission.granted) {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (permission.status !== 'granted') {
         Alert.alert('Permissão necessária', 'Permita o uso da câmera para tirar a foto da entrega.');
         return;
       }
-      setCapturedPhoto(null);
-      setCameraReady(false);
-      setShowCameraModal(true);
-    } catch (error) {
-      Alert.alert('Falha ao abrir câmera', getApiError(error));
-    }
-  };
 
-  const onCapturePhoto = async () => {
-    if (!cameraRef.current) {
-      Alert.alert('Câmera indisponível', 'Não foi possível acessar a câmera neste momento.');
-      return;
-    }
-
-    try {
-      setCameraBusy(true);
-      const picture = await cameraRef.current.takePictureAsync({
+      const captureResult = await ImagePicker.launchCameraAsync({
         base64: true,
-        quality: 0.75
+        quality: 0.55,
+        allowsEditing: false,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images
       });
 
-      if (!picture?.base64 || !picture?.uri) {
-        Alert.alert('Falha ao capturar', 'Não foi possível obter a imagem da câmera.');
+      if (captureResult.canceled || captureResult.assets.length === 0) {
+        return;
+      }
+
+      const asset = captureResult.assets[0];
+      if (!asset.base64 || asset.base64.length === 0) {
+        Alert.alert('Falha ao capturar', 'Não foi possível gerar a imagem para envio.');
         return;
       }
 
       const fileName = `photo_${Date.now()}.jpg`;
-      setCapturedPhoto({
-        uri: picture.uri,
-        base64: picture.base64,
-        fileName
-      });
-    } catch (error) {
-      Alert.alert('Falha ao capturar', getApiError(error));
-    } finally {
-      setCameraBusy(false);
-    }
-  };
-
-  const onConfirmCapturedPhoto = async () => {
-    if (!capturedPhoto) {
-      return;
-    }
-
-    try {
       setCameraBusy(true);
       await uploadDeliveryPhoto({
         routeId,
         waypointId: waypoint.id,
-        imageBase64: capturedPhoto.base64,
-        fileName: capturedPhoto.fileName
+        imageBase64: asset.base64,
+        fileName
       });
 
       setHasUploadedPhoto(true);
-      setUploadedPhotoName(capturedPhoto.fileName);
-      setCapturedPhoto(null);
-      setShowCameraModal(false);
+      setUploadedPhotoName(fileName);
       Alert.alert('Foto enviada', 'Foto da entrega salva com sucesso.');
     } catch (error) {
       Alert.alert('Falha no envio da foto', getApiError(error));
@@ -218,6 +178,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="primary"
           onPress={onTakePhoto}
           loading={cameraBusy}
+          disabled={loading}
           style={styles.button}
         />
         <Text style={styles.photoStatus}>
@@ -231,6 +192,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="success"
           onPress={onConfirmDelivered}
           loading={loading}
+          disabled={cameraBusy}
           style={styles.button}
         />
 
@@ -239,6 +201,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="danger"
           onPress={() => setShowFailureModal(true)}
           loading={loading}
+          disabled={cameraBusy}
           style={styles.button}
         />
       </View>
@@ -293,67 +256,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
               />
             </View>
           </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={showCameraModal}
-        animationType="slide"
-        onRequestClose={() => {
-          setShowCameraModal(false);
-          setCapturedPhoto(null);
-        }}
-      >
-        <View style={styles.cameraContainer}>
-          {capturedPhoto ? (
-            <>
-              <Image source={{ uri: capturedPhoto.uri }} style={styles.cameraView} resizeMode="cover" />
-              <View style={styles.cameraActions}>
-                <PrimaryButton
-                  label="Tirar outra"
-                  variant="neutral"
-                  onPress={() => setCapturedPhoto(null)}
-                  disabled={cameraBusy}
-                  style={styles.cameraActionButton}
-                />
-                <PrimaryButton
-                  label="Confirmar foto"
-                  variant="primary"
-                  onPress={onConfirmCapturedPhoto}
-                  loading={cameraBusy}
-                  style={styles.cameraActionButton}
-                />
-              </View>
-            </>
-          ) : (
-            <>
-              <CameraView
-                ref={cameraRef}
-                style={styles.cameraView}
-                facing="back"
-                onCameraReady={() => setCameraReady(true)}
-              />
-              <View style={styles.cameraActions}>
-                <PrimaryButton
-                  label="Cancelar"
-                  variant="neutral"
-                  onPress={() => {
-                    setShowCameraModal(false);
-                    setCapturedPhoto(null);
-                  }}
-                  style={styles.cameraActionButton}
-                />
-                <PrimaryButton
-                  label="Capturar foto"
-                  variant="primary"
-                  onPress={onCapturePhoto}
-                  loading={cameraBusy}
-                  disabled={!cameraReady || cameraBusy}
-                  style={styles.cameraActionButton}
-                />
-              </View>
-            </>
-          )}
         </View>
       </Modal>
     </ScrollView>
@@ -443,26 +345,6 @@ const styles = StyleSheet.create({
     gap: 8
   },
   modalAction: {
-    flex: 1
-  },
-  cameraContainer: {
-    flex: 1,
-    backgroundColor: '#000'
-  },
-  cameraView: {
-    ...StyleSheet.absoluteFillObject
-  },
-  cameraActions: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 24,
-    flexDirection: 'row',
-    gap: 8,
-    zIndex: 20,
-    elevation: 20
-  },
-  cameraActionButton: {
     flex: 1
   }
 });

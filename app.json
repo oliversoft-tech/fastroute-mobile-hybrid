@@ -21,6 +21,18 @@
       "expo-document-picker",
       "expo-asset",
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "2937cf32-e16b-4af2-841a-583e048d998a"
+      }
+    },
+    "owner": "oliverbill",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/2937cf32-e16b-4af2-841a-583e048d998a"
+    }
   }
 }

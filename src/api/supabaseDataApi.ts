@@ -55,6 +55,14 @@ function mapWaypointStatus(value: unknown): WaypointStatus {
     .trim()
     .toUpperCase();
 
+  if (normalized.includes('FALHA TEMPO ADVERSO')) {
+    return 'FALHA TEMPO ADVERSO';
+  }
+
+  if (normalized.includes('FALHA MORADOR AUSENTE')) {
+    return 'FALHA MORADOR AUSENTE';
+  }
+
   if (normalized.includes('EM_ROTA') || normalized.includes('EM ANDAMENTO') || normalized.includes('ANDAMENTO')) {
     return 'EM_ROTA';
   }

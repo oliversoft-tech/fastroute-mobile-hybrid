@@ -1,5 +1,10 @@
 export type RouteStatus = 'PENDENTE' | 'EM_ROTA' | 'FINALIZADA';
-export type WaypointStatus = 'PENDENTE' | 'EM_ROTA' | 'CONCLUIDO';
+export type WaypointStatus =
+  | 'PENDENTE'
+  | 'EM_ROTA'
+  | 'CONCLUIDO'
+  | 'FALHA TEMPO ADVERSO'
+  | 'FALHA MORADOR AUSENTE';
 
 export interface Route {
   id: number;

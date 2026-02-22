@@ -11,6 +11,7 @@ import {
   View
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { StackActions } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
@@ -43,12 +44,12 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const meta = getWaypointMeta(waypoint);
 
   const returnToRouteDetail = () => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-
-    navigation.navigate('RouteDetail', { routeId });
+    navigation.dispatch(
+      StackActions.popTo('RouteDetail', {
+        routeId,
+        refreshAt: Date.now()
+      })
+    );
   };
 
   const finishWaypoint = async (

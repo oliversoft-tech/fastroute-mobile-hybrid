@@ -30,7 +30,7 @@ import { openGoogleMapsRoute } from '../utils/googleMaps';
 type Props = NativeStackScreenProps<RootStackParamList, 'RouteDetail'>;
 
 export function RouteDetailScreen({ route, navigation }: Props) {
-  const { routeId } = route.params;
+  const { routeId, refreshAt } = route.params;
   const [routeDetail, setRouteDetail] = useState<RouteDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -55,7 +55,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [routeId]);
+  }, [routeId, refreshAt]);
 
   useFocusEffect(
     useCallback(() => {

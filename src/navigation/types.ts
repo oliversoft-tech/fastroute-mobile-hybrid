@@ -5,7 +5,7 @@ export type RootStackParamList = {
   Routes: undefined;
   ImportRoute: undefined;
   FileBrowser: undefined;
-  RouteDetail: { routeId: number };
+  RouteDetail: { routeId: number; refreshAt?: number };
   Delivery: { routeId: number; waypoint: Waypoint };
   Map: { routeId: number; waypoints: Waypoint[] };
 };

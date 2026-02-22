@@ -22,6 +22,10 @@ export function getWaypointStatusLabel(status: WaypointStatus) {
       return 'EM ROTA';
     case 'CONCLUIDO':
       return 'ENTREGUE';
+    case 'FALHA TEMPO ADVERSO':
+      return 'FALHA TEMPO ADVERSO';
+    case 'FALHA MORADOR AUSENTE':
+      return 'FALHA MORADOR AUSENTE';
     default:
       return status;
   }
@@ -36,6 +40,9 @@ export function getStatusColor(status: RouteStatus | WaypointStatus) {
       return colors.primary;
     case 'PENDENTE':
       return colors.warning;
+    case 'FALHA TEMPO ADVERSO':
+    case 'FALHA MORADOR AUSENTE':
+      return colors.danger;
     default:
       return colors.neutral;
   }

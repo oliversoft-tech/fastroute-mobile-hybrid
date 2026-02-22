@@ -4,11 +4,10 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { getWaypointMeta } from '../utils/waypointMeta';
-import { startRoute, updateWaypointOrder } from '../api/routesApi';
+import { updateWaypointOrder } from '../api/routesApi';
 import { Waypoint } from '../api/types';
 import { getApiError } from '../api/httpClient';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { openGoogleMapsRoute } from '../utils/googleMaps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 const WebIFrame = 'iframe' as unknown as React.ComponentType<Record<string, unknown>>;
@@ -273,10 +272,11 @@ function buildLeafletMapHtml(
 </html>`;
 }
 
-export function MapScreen({ route }: Props) {
+export function MapScreen({ route, navigation }: Props) {
   const { waypoints } = route.params;
   const [orderedPointKeys, setOrderedPointKeys] = useState<string[]>([]);
   const [movedWaypointIds, setMovedWaypointIds] = useState<number[]>([]);
+  const [confirmDisabled, setConfirmDisabled] = useState(true);
   const [loading, setLoading] = useState(false);
   const [mapLoadError, setMapLoadError] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
@@ -302,6 +302,7 @@ export function MapScreen({ route }: Props) {
   useEffect(() => {
     setOrderedPointKeys(initialPoints.map((point) => point.pointKey));
     setMovedWaypointIds([]);
+    setConfirmDisabled(true);
   }, [initialPoints]);
 
   const pointsByKey = useMemo(
@@ -331,15 +332,6 @@ export function MapScreen({ route }: Props) {
 
     return reordered;
   }, [initialPoints, orderedPointKeys, pointsByKey]);
-
-  const orderedWaypoints = useMemo(
-    () =>
-      orderedPoints.map((point, index) => ({
-        ...point.waypoint,
-        seq_order: index + 1
-      })),
-    [orderedPoints]
-  );
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -379,6 +371,7 @@ export function MapScreen({ route }: Props) {
               .filter((entry) => Number.isFinite(entry))
           )];
           setMovedWaypointIds(changedIds);
+          setConfirmDisabled(changedIds.length === 0);
         }
       }
 
@@ -432,27 +425,8 @@ export function MapScreen({ route }: Props) {
     return `https://staticmap.openstreetmap.de/staticmap.php?center=${initial.latitude},${initial.longitude}&zoom=13&size=640x640&markers=${encodeURIComponent(markers)}`;
   }, [orderedPoints]);
 
-  const openDirections = async () => {
-    if (orderedWaypoints.length === 0) {
-      return;
-    }
-
-    await openGoogleMapsRoute(orderedWaypoints);
-  };
-
-  const startRouteAndNavigate = async () => {
-    try {
-      setLoading(true);
-      await startRoute(route.params.routeId);
-      await openDirections();
-    } catch (error) {
-      Alert.alert('Erro ao iniciar rota', getApiError(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const onConfirmOrder = async () => {
+    setConfirmDisabled(true);
     try {
       setLoading(true);
       const changedIds = [...new Set(
@@ -464,18 +438,7 @@ export function MapScreen({ route }: Props) {
         await updateWaypointOrder(changedIds);
       }
 
-      Alert.alert('Ordem confirmada', 'Deseja iniciar a rota?', [
-        {
-          text: 'Não',
-          style: 'cancel'
-        },
-        {
-          text: 'Sim',
-          onPress: () => {
-            void startRouteAndNavigate();
-          }
-        }
-      ]);
+      navigation.replace('RouteDetail', { routeId: route.params.routeId });
     } catch (error) {
       Alert.alert('Erro ao confirmar ordem', getApiError(error));
     } finally {
@@ -530,7 +493,7 @@ export function MapScreen({ route }: Props) {
           label="Confirmar ordem"
           onPress={onConfirmOrder}
           loading={loading}
-          disabled={orderedWaypoints.length === 0}
+          disabled={confirmDisabled}
         />
       </View>
     </View>

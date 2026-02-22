@@ -439,6 +439,20 @@ export async function updateWaypointStatus(
   await httpClient.patch('waypoint/finish', payload);
 }
 
+export async function uploadDeliveryPhoto(params: {
+  routeId: number;
+  waypointId: number;
+  imageBase64: string;
+  fileName: string;
+}) {
+  await httpClient.post('delivery-photo', {
+    route_id: params.routeId,
+    waypoint_id: params.waypointId,
+    image_base64: params.imageBase64,
+    file_name: params.fileName
+  });
+}
+
 export async function updateWaypointOrder(waypointIds: number[]) {
   const orderedIds = waypointIds
     .map((value) => Math.trunc(Number(value)))

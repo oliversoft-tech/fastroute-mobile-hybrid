@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert,
   Linking,
@@ -9,14 +9,18 @@ import {
   TextInput,
   View
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { StatusBadge } from '../components/StatusBadge';
 import { getWaypointMeta } from '../utils/waypointMeta';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { updateWaypointStatus, WaypointFinishStatus } from '../api/routesApi';
+import {
+  updateWaypointStatus,
+  uploadDeliveryPhoto,
+  WaypointFinishStatus
+} from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Delivery'>;
@@ -26,10 +30,15 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const { routeId, waypoint } = route.params;
   const [currentStatus, setCurrentStatus] = useState(waypoint.status);
   const [loading, setLoading] = useState(false);
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [hasUploadedPhoto, setHasUploadedPhoto] = useState(false);
+  const [uploadedPhotoName, setUploadedPhotoName] = useState<string | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
   const [showFailureModal, setShowFailureModal] = useState(false);
   const [failureStatus, setFailureStatus] = useState<FailureStatus>('FALHA TEMPO ADVERSO');
   const [failureObs, setFailureObs] = useState('');
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
 
   const returnToRouteDetail = () => {
@@ -63,27 +72,59 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
   const onTakePhoto = async () => {
     try {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (permission.status !== 'granted') {
+      const permission = cameraPermission?.granted
+        ? cameraPermission
+        : await requestCameraPermission();
+      if (!permission.granted) {
         Alert.alert('Permissão necessária', 'Permita o uso da câmera para tirar a foto da entrega.');
         return;
       }
-
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: false,
-        quality: 0.8
-      });
-
-      if (!result.canceled && result.assets.length > 0) {
-        setPhotoUri(result.assets[0].uri);
-      }
+      setShowCameraModal(true);
     } catch (error) {
       Alert.alert('Falha ao abrir câmera', getApiError(error));
     }
   };
 
+  const onCaptureAndUploadPhoto = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Câmera indisponível', 'Não foi possível acessar a câmera neste momento.');
+      return;
+    }
+
+    try {
+      setCameraBusy(true);
+      const picture = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.75
+      });
+
+      const base64 = picture?.base64;
+      if (!base64) {
+        Alert.alert('Falha ao capturar', 'Não foi possível obter a imagem da câmera.');
+        return;
+      }
+
+      const fileName = `photo_${Date.now()}.jpg`;
+      await uploadDeliveryPhoto({
+        routeId,
+        waypointId: waypoint.id,
+        imageBase64: base64,
+        fileName
+      });
+
+      setHasUploadedPhoto(true);
+      setUploadedPhotoName(fileName);
+      setShowCameraModal(false);
+      Alert.alert('Foto enviada', 'Foto da entrega salva com sucesso.');
+    } catch (error) {
+      Alert.alert('Falha no envio da foto', getApiError(error));
+    } finally {
+      setCameraBusy(false);
+    }
+  };
+
   const onConfirmDelivered = () => {
-    if (!photoUri) {
+    if (!hasUploadedPhoto) {
       Alert.alert(
         'Confirmação',
         'Não há foto para comprovar a entrega. Deseja prosseguir mesmo assim?',
@@ -148,10 +189,13 @@ export function DeliveryScreen({ route, navigation }: Props) {
           label="Tirar foto"
           variant="primary"
           onPress={onTakePhoto}
+          loading={cameraBusy}
           style={styles.button}
         />
         <Text style={styles.photoStatus}>
-          {photoUri ? 'Foto capturada para comprovação.' : 'Nenhuma foto capturada.'}
+          {hasUploadedPhoto
+            ? `Foto enviada: ${uploadedPhotoName ?? 'comprovante.jpg'}`
+            : 'Nenhuma foto enviada.'}
         </Text>
 
         <PrimaryButton
@@ -220,6 +264,31 @@ export function DeliveryScreen({ route, navigation }: Props) {
                 style={styles.modalAction}
               />
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showCameraModal}
+        animationType="slide"
+        onRequestClose={() => setShowCameraModal(false)}
+      >
+        <View style={styles.cameraContainer}>
+          <CameraView ref={cameraRef} style={styles.cameraView} facing="back" />
+          <View style={styles.cameraActions}>
+            <PrimaryButton
+              label="Cancelar"
+              variant="neutral"
+              onPress={() => setShowCameraModal(false)}
+              style={styles.cameraActionButton}
+            />
+            <PrimaryButton
+              label="Capturar foto"
+              variant="primary"
+              onPress={onCaptureAndUploadPhoto}
+              loading={cameraBusy}
+              style={styles.cameraActionButton}
+            />
           </View>
         </View>
       </Modal>
@@ -310,6 +379,24 @@ const styles = StyleSheet.create({
     gap: 8
   },
   modalAction: {
+    flex: 1
+  },
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: '#000'
+  },
+  cameraView: {
+    flex: 1
+  },
+  cameraActions: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 24,
+    flexDirection: 'row',
+    gap: 8
+  },
+  cameraActionButton: {
     flex: 1
   }
 });

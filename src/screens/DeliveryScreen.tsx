@@ -3,6 +3,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -34,8 +35,11 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [hasUploadedPhoto, setHasUploadedPhoto] = useState(false);
   const [uploadedPhotoName, setUploadedPhotoName] = useState<string | null>(null);
   const [showFailureModal, setShowFailureModal] = useState(false);
+  const [showDeliveredConfirmModal, setShowDeliveredConfirmModal] = useState(false);
   const [failureStatus, setFailureStatus] = useState<FailureStatus>('FALHA TEMPO ADVERSO');
   const [failureObs, setFailureObs] = useState('');
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
   const meta = getWaypointMeta(waypoint);
 
   const returnToRouteDetail = () => {
@@ -55,20 +59,39 @@ export function DeliveryScreen({ route, navigation }: Props) {
   ) => {
     try {
       setLoading(true);
+      setFeedbackError(null);
+      setFeedbackSuccess(null);
       await updateWaypointStatus(routeId, waypoint.id, status, options);
       if (status === 'CONCLUIDO') {
         setCurrentStatus('CONCLUIDO');
       }
+      setFeedbackSuccess('Status atualizado com sucesso.');
       returnToRouteDetail();
     } catch (error) {
-      Alert.alert('Falha ao atualizar', getApiError(error));
+      const message = getApiError(error);
+      setFeedbackError(message);
+      Alert.alert('Falha ao atualizar', message);
     } finally {
       setLoading(false);
     }
   };
 
   const onTakePhoto = async () => {
+    if (Platform.OS === 'web') {
+      setFeedbackError(
+        'No preview web não há câmera nativa. Abra no app Android/iOS (Expo Go) para tirar a foto.'
+      );
+      Alert.alert(
+        'Câmera no mobile',
+        'No preview web não há câmera nativa. Abra no app Android/iOS (Expo Go) para tirar a foto.'
+      );
+      return;
+    }
+
     try {
+      setCameraBusy(true);
+      setFeedbackError(null);
+      setFeedbackSuccess(null);
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (permission.status !== 'granted') {
         Alert.alert('Permissão necessária', 'Permita o uso da câmera para tirar a foto da entrega.');
@@ -93,7 +116,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
       }
 
       const fileName = `photo_${Date.now()}.jpg`;
-      setCameraBusy(true);
       await uploadDeliveryPhoto({
         routeId,
         waypointId: waypoint.id,
@@ -103,9 +125,12 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
       setHasUploadedPhoto(true);
       setUploadedPhotoName(fileName);
+      setFeedbackSuccess('Foto enviada com sucesso.');
       Alert.alert('Foto enviada', 'Foto da entrega salva com sucesso.');
     } catch (error) {
-      Alert.alert('Falha no envio da foto', getApiError(error));
+      const message = getApiError(error);
+      setFeedbackError(message);
+      Alert.alert('Falha no envio da foto', message);
     } finally {
       setCameraBusy(false);
     }
@@ -113,22 +138,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
   const onConfirmDelivered = () => {
     if (!hasUploadedPhoto) {
-      Alert.alert(
-        'Confirmação',
-        'Não há foto para comprovar a entrega. Deseja prosseguir mesmo assim?',
-        [
-          {
-            text: 'Cancelar',
-            style: 'cancel'
-          },
-          {
-            text: 'Prosseguir',
-            onPress: () => {
-              finishWaypoint('CONCLUIDO');
-            }
-          }
-        ]
-      );
+      setShowDeliveredConfirmModal(true);
       return;
     }
 
@@ -186,6 +196,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
             ? `Foto enviada: ${uploadedPhotoName ?? 'comprovante.jpg'}`
             : 'Nenhuma foto enviada.'}
         </Text>
+        {feedbackSuccess ? <Text style={styles.feedbackSuccess}>{feedbackSuccess}</Text> : null}
+        {feedbackError ? <Text style={styles.feedbackError}>{feedbackError}</Text> : null}
 
         <PrimaryButton
           label="Marcar como ENTREGUE"
@@ -205,6 +217,40 @@ export function DeliveryScreen({ route, navigation }: Props) {
           style={styles.button}
         />
       </View>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={showDeliveredConfirmModal}
+        onRequestClose={() => setShowDeliveredConfirmModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Confirmação</Text>
+            <Text style={styles.modalText}>
+              Não há foto para comprovar a entrega. Deseja prosseguir mesmo assim?
+            </Text>
+            <View style={styles.modalActions}>
+              <PrimaryButton
+                label="Cancelar"
+                variant="neutral"
+                onPress={() => setShowDeliveredConfirmModal(false)}
+                style={styles.modalAction}
+              />
+              <PrimaryButton
+                label="Prosseguir"
+                variant="success"
+                onPress={() => {
+                  setShowDeliveredConfirmModal(false);
+                  finishWaypoint('CONCLUIDO');
+                }}
+                loading={loading}
+                style={styles.modalAction}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         transparent
@@ -300,9 +346,21 @@ const styles = StyleSheet.create({
   },
   photoStatus: {
     marginTop: -2,
-    marginBottom: 12,
+    marginBottom: 6,
     color: colors.textSecondary,
     fontSize: 12
+  },
+  feedbackSuccess: {
+    marginBottom: 8,
+    color: colors.success,
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  feedbackError: {
+    marginBottom: 8,
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '600'
   },
   modalOverlay: {
     flex: 1,
@@ -322,6 +380,10 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
     marginBottom: 10
+  },
+  modalText: {
+    color: colors.textSecondary,
+    marginBottom: 12
   },
   obsInput: {
     minHeight: 92,

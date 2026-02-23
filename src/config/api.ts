@@ -7,4 +7,6 @@ export const API_BASE_URL =
 export const SUPABASE_URL =
   runtimeProcess?.env?.EXPO_PUBLIC_SUPABASE_URL ?? 'https://mbtwevtytgnlztaccygy.supabase.co';
 
-export const SUPABASE_ANON_KEY = runtimeProcess?.env?.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+export const SUPABASE_ANON_KEY =
+  runtimeProcess?.env?.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
+  'sb_publishable_HcW8RYOkw5qXWHoWlESGhw_HI_Kcf-D';

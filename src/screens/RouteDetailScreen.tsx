@@ -39,7 +39,12 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const loadRouteDetails = useCallback(async () => {
     try {
       const data = await getRouteDetails(routeId);
-      if (data.waypoints && data.waypoints.length > 0) {
+      const needsAddressEnrichment = (data.waypoints ?? []).some((waypoint) => {
+        const title = waypoint.title?.trim().toLowerCase() ?? '';
+        return title.length === 0 || title === 'endereço não informado';
+      });
+
+      if (data.waypoints && data.waypoints.length > 0 && !needsAddressEnrichment) {
         setRouteDetail(data);
         return;
       }

@@ -88,18 +88,30 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   );
 
   const onStartRoute = async () => {
+    let startErrorMessage: string | null = null;
     try {
       setSaving(true);
-      await startRoute(routeId);
+      try {
+        await startRoute(routeId);
+      } catch (error) {
+        startErrorMessage = getApiError(error);
+      }
       await loadRouteDetails();
       if (waypoints.length === 0) {
-        Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);
+        if (startErrorMessage) {
+          Alert.alert('Rota iniciada', `Navegação iniciada. O backend retornou: ${startErrorMessage}`);
+        } else {
+          Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);
+        }
         return;
       }
 
       await openGoogleMapsRoute(waypoints);
+      if (startErrorMessage) {
+        Alert.alert('Navegação iniciada', `Google Maps aberto. O backend retornou: ${startErrorMessage}`);
+      }
     } catch (error) {
-      Alert.alert('Erro ao iniciar rota', getApiError(error));
+      Alert.alert('Erro ao abrir navegação', getApiError(error));
     } finally {
       setSaving(false);
     }

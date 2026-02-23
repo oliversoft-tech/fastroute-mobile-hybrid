@@ -138,6 +138,10 @@ export function setAuthSessionTokens(accessToken: string | null, refreshToken: s
   delete httpClient.defaults.headers.common.Authorization;
 }
 
+export function getAuthAccessToken() {
+  return currentAccessKey;
+}
+
 export function setOnUnauthorized(handler: (() => void | Promise<void>) | null) {
   unauthorizedHandler = handler;
 }

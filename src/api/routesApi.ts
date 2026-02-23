@@ -1,13 +1,59 @@
 import { Route, RouteDetail, Waypoint, WaypointStatus } from './types';
-import { httpClient } from './httpClient';
+import { getAuthAccessToken, httpClient } from './httpClient';
 import {
   enrichWaypointsWithAddressData,
   listRouteWaypointsFromSupabase,
   updateRouteWaypointStatusInSupabase
 } from './supabaseDataApi';
+import { API_BASE_URL } from '../config/api';
 
 interface ApiObject {
   [key: string]: unknown;
+}
+
+function buildApiUrl(path: string) {
+  const base = API_BASE_URL.endsWith('/') ? API_BASE_URL : `${API_BASE_URL}/`;
+  const normalizedPath = path.replace(/^\/+/, '');
+  return `${base}${normalizedPath}`;
+}
+
+function parseApiResponseBody(raw: string) {
+  if (!raw || raw.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function pickApiErrorMessage(payload: Record<string, unknown> | null, fallback: string) {
+  if (!payload) {
+    return fallback;
+  }
+
+  const directCandidates = ['message', 'msg', 'error', 'hint'];
+  for (const key of directCandidates) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  const nestedError = payload.error;
+  if (nestedError && typeof nestedError === 'object') {
+    const nested = nestedError as Record<string, unknown>;
+    for (const key of ['message', 'msg', 'error']) {
+      const value = nested[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+
+  return fallback;
 }
 
 function pickString(...values: unknown[]) {
@@ -502,7 +548,25 @@ export async function updateWaypointStatus(
 
   const obsFalha = options?.obs_falha ?? '';
 
-  await httpClient.patch('waypoint/finish', formData);
+  const authToken = getAuthAccessToken();
+  const headers: Record<string, string> = {
+    Accept: 'application/json'
+  };
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(buildApiUrl('waypoint/finish'), {
+    method: 'PATCH',
+    headers,
+    body: formData
+  });
+  const rawBody = await response.text();
+  const parsedBody = parseApiResponseBody(rawBody);
+
+  if (!response.ok) {
+    throw new Error(pickApiErrorMessage(parsedBody, `Erro HTTP ${response.status}`));
+  }
 
   const supabaseStatus = mapWaypointStatusToSupabase(mappedStatus);
   if (!supabaseStatus) {

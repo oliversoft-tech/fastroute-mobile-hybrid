@@ -60,6 +60,8 @@ function buildLeafletMapHtml(
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const points = ${payload};
+    const pointByKey = new Map(points.map((point) => [point.pointKey, point]));
+    const orderedPointKeys = points.map((point) => point.pointKey);
     const movedPointKeys = new Set();
     const map = L.map('map', { zoomControl: true, attributionControl: true });
     const markersLayer = L.layerGroup().addTo(map);
@@ -92,6 +94,10 @@ function buildLeafletMapHtml(
       });
     }
 
+    function getOrder(pointKey) {
+      return orderedPointKeys.findIndex((entry) => entry === pointKey) + 1;
+    }
+
     function applyViewport() {
       const bounds = points.map((point) => [point.latitude, point.longitude]);
       if (bounds.length === 0) {
@@ -116,7 +122,7 @@ function buildLeafletMapHtml(
       let minDistance = Infinity;
 
       points.forEach((point, index) => {
-        if (index === fromIndex) {
+        if (point.pointKey === draggedKey) {
           return;
         }
         const markerPoint = map.latLngToContainerPoint([point.latitude, point.longitude]);
@@ -128,10 +134,20 @@ function buildLeafletMapHtml(
       });
 
       if (targetIndex !== fromIndex && minDistance <= 90) {
-        const targetKey = points[targetIndex].pointKey;
-        const source = points[fromIndex];
-        points[fromIndex] = points[targetIndex];
-        points[targetIndex] = source;
+        const targetKey = points[targetIndex]?.pointKey;
+        if (!targetKey) {
+          return { changed: false, targetKey: null };
+        }
+
+        const orderFromIndex = orderedPointKeys.findIndex((pointKey) => pointKey === draggedKey);
+        const orderTargetIndex = orderedPointKeys.findIndex((pointKey) => pointKey === targetKey);
+        if (orderFromIndex < 0 || orderTargetIndex < 0) {
+          return { changed: false, targetKey: null };
+        }
+
+        const sourceOrderKey = orderedPointKeys[orderFromIndex];
+        orderedPointKeys[orderFromIndex] = orderedPointKeys[orderTargetIndex];
+        orderedPointKeys[orderTargetIndex] = sourceOrderKey;
         return { changed: true, targetKey };
       }
 
@@ -141,8 +157,8 @@ function buildLeafletMapHtml(
     function renderMap() {
       markersLayer.clearLayers();
 
-      points.forEach((point, index) => {
-        const order = index + 1;
+      points.forEach((point) => {
+        const order = getOrder(point.pointKey);
         const wasReordered = movedPointKeys.has(point.pointKey);
         const isStart = order === 1;
         const isEnd = order === points.length && points.length > 1;
@@ -166,9 +182,8 @@ function buildLeafletMapHtml(
         });
 
         marker.on('dblclick', () => {
-          const currentIndex = points.findIndex((currentPoint) => currentPoint.pointKey === point.pointKey);
-          const currentPoint = currentIndex >= 0 ? points[currentIndex] : point;
-          const currentOrder = currentIndex >= 0 ? currentIndex + 1 : order;
+          const currentPoint = pointByKey.get(point.pointKey) || point;
+          const currentOrder = getOrder(currentPoint.pointKey);
           const currentIsStart = currentOrder === 1;
           const currentIsEnd = currentOrder === points.length && points.length > 1;
           const currentPointType = currentIsStart ? 'Início' : (currentIsEnd ? 'Fim' : 'Parada');
@@ -194,7 +209,7 @@ function buildLeafletMapHtml(
       )];
       emit({
         type: 'reorder',
-        order: points.map((point) => point.pointKey),
+        order: [...orderedPointKeys],
         movedWaypointIds
       });
     }

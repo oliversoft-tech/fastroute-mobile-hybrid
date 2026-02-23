@@ -68,6 +68,23 @@ async function refreshAccessToken() {
   return refreshedTokens.accessToken;
 }
 
+async function getRefreshedAccessToken() {
+  if (!refreshInFlight) {
+    refreshInFlight = refreshAccessToken().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+
+  return refreshInFlight;
+}
+
+async function invalidateSessionAndLogout() {
+  setAuthSessionTokens(null, null);
+  if (unauthorizedHandler) {
+    await unauthorizedHandler();
+  }
+}
+
 httpClient.interceptors.request.use((config) => {
   const requestUrl = `${config.url ?? ''}`;
   const authRequest = isAuthRequest(requestUrl);
@@ -102,13 +119,7 @@ httpClient.interceptors.response.use(
     (originalConfig as { _retry?: boolean })._retry = true;
 
     try {
-      if (!refreshInFlight) {
-        refreshInFlight = refreshAccessToken().finally(() => {
-          refreshInFlight = null;
-        });
-      }
-
-      const renewedAccessToken = await refreshInFlight;
+      const renewedAccessToken = await getRefreshedAccessToken();
       if (!renewedAccessToken) {
         throw new Error('Sessão expirada.');
       }
@@ -116,11 +127,7 @@ httpClient.interceptors.response.use(
       originalConfig.headers = applyBearerHeader(originalConfig.headers, renewedAccessToken) as any;
       return httpClient(originalConfig);
     } catch (refreshError) {
-      setAuthSessionTokens(null, null);
-      if (unauthorizedHandler) {
-        await unauthorizedHandler();
-      }
-
+      await invalidateSessionAndLogout();
       return Promise.reject(refreshError);
     }
   }
@@ -142,6 +149,47 @@ export function getAuthAccessToken() {
   return currentAccessKey;
 }
 
+export async function authorizedFetch(url: string, init?: RequestInit) {
+  const normalizedInit = init ?? {};
+  const headers = new Headers((normalizedInit.headers as HeadersInit | undefined) ?? {});
+  if (currentAccessKey && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${currentAccessKey}`);
+  }
+
+  let response = await fetch(url, {
+    ...normalizedInit,
+    headers
+  });
+
+  if (response.status !== 401 || isAuthRequest(url)) {
+    return response;
+  }
+
+  try {
+    const renewedAccessToken = await getRefreshedAccessToken();
+    if (!renewedAccessToken) {
+      await invalidateSessionAndLogout();
+      return response;
+    }
+
+    const retryHeaders = new Headers((normalizedInit.headers as HeadersInit | undefined) ?? {});
+    retryHeaders.set('Authorization', `Bearer ${renewedAccessToken}`);
+    response = await fetch(url, {
+      ...normalizedInit,
+      headers: retryHeaders
+    });
+
+    if (response.status === 401) {
+      await invalidateSessionAndLogout();
+    }
+
+    return response;
+  } catch {
+    await invalidateSessionAndLogout();
+    return response;
+  }
+}
+
 export function setOnUnauthorized(handler: (() => void | Promise<void>) | null) {
   unauthorizedHandler = handler;
 }
@@ -160,16 +208,96 @@ export function setTokenRefreshHandler(
   tokenRefreshHandler = handler;
 }
 
+function parseJsonString(text: string) {
+  const trimmed = text.trim();
+  if (
+    !(trimmed.startsWith('{') && trimmed.endsWith('}')) &&
+    !(trimmed.startsWith('[') && trimmed.endsWith(']'))
+  ) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function extractMessage(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = parseJsonString(trimmed);
+    if (parsed) {
+      const nested = extractMessage(parsed, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+
+    const quotedJsonMatch = trimmed.match(/"(\{.*\}|\[.*\])"/);
+    if (quotedJsonMatch?.[1]) {
+      const unescaped = quotedJsonMatch[1].replace(/\\"/g, '"');
+      const nested = extractMessage(parseJsonString(unescaped), depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+
+    return trimmed;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = extractMessage(item, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const priorityKeys = [
+      'msg',
+      'message',
+      'error',
+      'hint',
+      'details',
+      'reason',
+      'body',
+      'data'
+    ];
+
+    for (const key of priorityKeys) {
+      if (!(key in record)) {
+        continue;
+      }
+      const nested = extractMessage(record[key], depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+
+  return null;
+}
+
 export function getApiError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const responseData = error.response?.data;
-    const message = responseData?.message ?? responseData?.msg ?? responseData?.error;
-    const hint = responseData?.hint;
-    if (typeof message === 'string' && message.length > 0) {
-      if (typeof hint === 'string' && hint.length > 0) {
-        return `${message}\n${hint}`;
-      }
-      return message;
+    const responseMessage = extractMessage(responseData);
+    if (responseMessage) {
+      return responseMessage;
     }
 
     if (typeof responseData === 'string' && responseData.length > 0) {
@@ -185,14 +313,18 @@ export function getApiError(error: unknown): string {
     }
 
     if (error.message) {
+      const parsedMessage = extractMessage(error.message);
+      if (parsedMessage) {
+        return parsedMessage;
+      }
       return error.message;
     }
   }
 
   if (error && typeof error === 'object') {
-    const maybeMessage = (error as { message?: unknown }).message;
-    if (typeof maybeMessage === 'string' && maybeMessage.trim().length > 0) {
-      return maybeMessage;
+    const extracted = extractMessage(error);
+    if (extracted) {
+      return extracted;
     }
   }
 

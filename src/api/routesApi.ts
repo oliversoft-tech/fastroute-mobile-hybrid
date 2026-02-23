@@ -1,5 +1,5 @@
 import { Route, RouteDetail, Waypoint, WaypointStatus } from './types';
-import { getAuthAccessToken, httpClient } from './httpClient';
+import { authorizedFetch, httpClient } from './httpClient';
 import {
   enrichWaypointsWithAddressData,
   listRouteWaypointsFromSupabase,
@@ -17,32 +17,47 @@ function buildApiUrl(path: string) {
   return `${base}${normalizedPath}`;
 }
 
-function parseApiResponseBody(raw: string) {
+function parseApiResponseBody(raw: string): unknown {
   if (!raw || raw.trim().length === 0) {
     return null;
   }
 
   try {
-    return JSON.parse(raw) as Record<string, unknown>;
+    return JSON.parse(raw) as unknown;
   } catch {
     return null;
   }
 }
 
-function pickApiErrorMessage(payload: Record<string, unknown> | null, fallback: string) {
+function pickApiErrorMessage(payload: unknown, fallback: string): string {
   if (!payload) {
     return fallback;
   }
 
+  if (Array.isArray(payload)) {
+    for (const entry of payload) {
+      const message: string = pickApiErrorMessage(entry, '');
+      if (message) {
+        return message;
+      }
+    }
+    return fallback;
+  }
+
+  if (typeof payload !== 'object') {
+    return fallback;
+  }
+
+  const record = payload as Record<string, unknown>;
   const directCandidates = ['message', 'msg', 'error', 'hint'];
   for (const key of directCandidates) {
-    const value = payload[key];
+    const value = record[key];
     if (typeof value === 'string' && value.trim().length > 0) {
       return value.trim();
     }
   }
 
-  const nestedError = payload.error;
+  const nestedError = record.error;
   if (nestedError && typeof nestedError === 'object') {
     const nested = nestedError as Record<string, unknown>;
     for (const key of ['message', 'msg', 'error']) {
@@ -54,6 +69,25 @@ function pickApiErrorMessage(payload: Record<string, unknown> | null, fallback: 
   }
 
   return fallback;
+}
+
+function assertWebhookSuccess(payload: unknown, fallbackMessage: string) {
+  const item =
+    Array.isArray(payload) && payload.length > 0 ? payload[0] : payload;
+  if (!item || typeof item !== 'object') {
+    return;
+  }
+
+  const record = item as Record<string, unknown>;
+  const okValue = record.ok;
+  const statusCodeRaw = record.statusCode ?? record.status_code;
+  const statusCode = Number(statusCodeRaw);
+  const hasHttpLikeError = Number.isFinite(statusCode) && statusCode >= 400;
+  const hasErrorField = record.error !== undefined && record.error !== null;
+
+  if (okValue === false || hasHttpLikeError || hasErrorField) {
+    throw new Error(pickApiErrorMessage(record, fallbackMessage));
+  }
 }
 
 function pickString(...values: unknown[]) {
@@ -462,15 +496,17 @@ export async function listRouteWaypoints(routeId: number) {
 }
 
 export async function startRoute(routeId: number) {
-  await httpClient.patch('route/start', null, {
+  const { data } = await httpClient.patch('route/start', null, {
     params: { route_id: routeId }
   });
+  assertWebhookSuccess(data, 'Não foi possível iniciar a rota.');
 }
 
 export async function finishRoute(routeId: number) {
-  await httpClient.patch('route/finish', null, {
+  const { data } = await httpClient.patch('route/finish', null, {
     params: { route_id: routeId }
   });
+  assertWebhookSuccess(data, 'Não foi possível finalizar a rota.');
 }
 
 export type WaypointFinishStatus =
@@ -548,17 +584,11 @@ export async function updateWaypointStatus(
 
   const obsFalha = options?.obs_falha ?? '';
 
-  const authToken = getAuthAccessToken();
-  const headers: Record<string, string> = {
-    Accept: 'application/json'
-  };
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
-  }
-
-  const response = await fetch(buildApiUrl('waypoint/finish'), {
+  const response = await authorizedFetch(buildApiUrl('waypoint/finish'), {
     method: 'PATCH',
-    headers,
+    headers: {
+      Accept: 'application/json'
+    },
     body: formData
   });
   const rawBody = await response.text();
@@ -567,6 +597,7 @@ export async function updateWaypointStatus(
   if (!response.ok) {
     throw new Error(pickApiErrorMessage(parsedBody, `Erro HTTP ${response.status}`));
   }
+  assertWebhookSuccess(parsedBody, 'Não foi possível atualizar o status do waypoint.');
 
   const supabaseStatus = mapWaypointStatusToSupabase(mappedStatus);
   if (!supabaseStatus) {
@@ -602,8 +633,9 @@ export async function updateWaypointOrder(params: {
         item.waypoint_id > 0
     );
 
-  await httpClient.patch('waypoint/reorder', {
+  const { data } = await httpClient.patch('waypoint/reorder', {
     route_id: routeId,
     reordered_waypoints: reorderedWaypoints
   });
+  assertWebhookSuccess(data, 'Não foi possível reordenar os waypoints.');
 }

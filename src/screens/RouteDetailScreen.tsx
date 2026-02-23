@@ -81,37 +81,23 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   );
 
   const waypoints = routeDetail?.waypoints ?? [];
+  const isRouteInProgress = routeDetail?.status === 'EM_ROTA';
 
-  const canFinalize = useMemo(
-    () => waypoints.length === 0 || waypoints.every((waypoint) => waypoint.status === 'CONCLUIDO'),
-    [waypoints]
-  );
+  const canFinalize = useMemo(() => isRouteInProgress, [isRouteInProgress]);
 
   const onStartRoute = async () => {
-    let startErrorMessage: string | null = null;
     try {
       setSaving(true);
-      try {
-        await startRoute(routeId);
-      } catch (error) {
-        startErrorMessage = getApiError(error);
-      }
+      await startRoute(routeId);
       await loadRouteDetails();
       if (waypoints.length === 0) {
-        if (startErrorMessage) {
-          Alert.alert('Rota iniciada', `Navegação iniciada. O backend retornou: ${startErrorMessage}`);
-        } else {
-          Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);
-        }
+        Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);
         return;
       }
 
       await openGoogleMapsRoute(waypoints);
-      if (startErrorMessage) {
-        Alert.alert('Navegação iniciada', `Google Maps aberto. O backend retornou: ${startErrorMessage}`);
-      }
     } catch (error) {
-      Alert.alert('Erro ao abrir navegação', getApiError(error));
+      Alert.alert('Erro ao iniciar rota', getApiError(error));
     } finally {
       setSaving(false);
     }
@@ -213,9 +199,10 @@ export function RouteDetailScreen({ route, navigation }: Props) {
 
           <PrimaryButton
             label="Finalizar rota"
-            variant={canFinalize ? 'success' : 'danger'}
+            variant="danger"
             onPress={onFinalize}
             loading={saving}
+            disabled={!canFinalize}
             style={styles.finalButton}
           />
         </>

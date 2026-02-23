@@ -5,9 +5,10 @@ import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { getWaypointMeta } from '../utils/waypointMeta';
-import { updateWaypointOrder } from '../api/routesApi';
+import { listRouteWaypoints, updateWaypointOrder } from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { Waypoint } from '../api/types';
 import {
   applyWaypointOrder,
   cacheRouteWaypointOrder,
@@ -162,21 +163,25 @@ function buildLeafletMapHtml(
             }
           }
           renderMap();
-          if (changed) {
-            applyViewport();
-          }
         });
 
         marker.on('dblclick', () => {
+          const currentIndex = points.findIndex((currentPoint) => currentPoint.pointKey === point.pointKey);
+          const currentPoint = currentIndex >= 0 ? points[currentIndex] : point;
+          const currentOrder = currentIndex >= 0 ? currentIndex + 1 : order;
+          const currentIsStart = currentOrder === 1;
+          const currentIsEnd = currentOrder === points.length && points.length > 1;
+          const currentPointType = currentIsStart ? 'Início' : (currentIsEnd ? 'Fim' : 'Parada');
+          const currentReordered = movedPointKeys.has(currentPoint.pointKey);
           emit({
             type: 'waypoint_dblclick',
-            waypointId: point.waypointId,
-            pointKey: point.pointKey,
-            order,
-            title: point.title,
-            subtitle: point.subtitle || '',
-            pointType,
-            wasReordered
+            waypointId: currentPoint.waypointId,
+            pointKey: currentPoint.pointKey,
+            order: currentOrder,
+            title: currentPoint.title,
+            subtitle: currentPoint.subtitle || '',
+            pointType: currentPointType,
+            wasReordered: currentReordered
           });
         });
 
@@ -203,22 +208,30 @@ function buildLeafletMapHtml(
 
 export function MapScreen({ route, navigation }: Props) {
   const { waypoints } = route.params;
+  const [mapWaypoints, setMapWaypoints] = useState<Waypoint[]>(() => {
+    const cachedOrder = getCachedRouteWaypointOrder(route.params.routeId);
+    return applyWaypointOrder(waypoints, cachedOrder);
+  });
+  const [mapRenderKey, setMapRenderKey] = useState(0);
   const [orderedPointKeys, setOrderedPointKeys] = useState<string[]>([]);
   const [movedWaypointIds, setMovedWaypointIds] = useState<number[]>([]);
   const [confirmDisabled, setConfirmDisabled] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
-  const initialWaypoints = useMemo(() => {
+
+  useEffect(() => {
     const cachedOrder = getCachedRouteWaypointOrder(route.params.routeId);
-    return applyWaypointOrder(waypoints, cachedOrder);
+    setMapWaypoints(applyWaypointOrder(waypoints, cachedOrder));
+    setMapRenderKey((prev) => prev + 1);
   }, [route.params.routeId, waypoints]);
 
   const initialPoints = useMemo(
     () =>
-      initialWaypoints.map((waypoint, index) => {
+      mapWaypoints.map((waypoint) => {
         const meta = getWaypointMeta(waypoint);
         return {
-          pointKey: `pin-${index + 1}-${waypoint.id}`,
+          pointKey: `pin-${waypoint.id}`,
           waypoint,
           waypointId: waypoint.id,
           title: meta.title,
@@ -227,7 +240,7 @@ export function MapScreen({ route, navigation }: Props) {
           longitude: meta.longitude
         };
       }),
-    [initialWaypoints]
+    [mapWaypoints]
   );
 
   const pointsByKey = useMemo(
@@ -285,24 +298,30 @@ export function MapScreen({ route, navigation }: Props) {
 
     if (payload.type === 'waypoint_dblclick') {
       const waypointId = Number(payload.waypointId);
-      const order = Number(payload.order);
-      const pointType = String(payload.pointType ?? '').trim();
-      const wasReordered = Boolean(payload.wasReordered);
-      const title = String(payload.title ?? '').trim();
-      const subtitle = String(payload.subtitle ?? '').trim();
-
-      if (Number.isFinite(waypointId)) {
-        setBadge({
-          waypointId,
-          order: Number.isFinite(order) ? order : 0,
-          pointType: pointType || undefined,
-          wasReordered,
-          title: title || 'Waypoint',
-          subtitle: subtitle || undefined
-        });
+      if (!Number.isFinite(waypointId)) {
+        return;
       }
+
+      const currentPoint = orderedPoints.find((point) => point.waypointId === waypointId);
+      const currentOrder = orderedPoints.findIndex((point) => point.waypointId === waypointId) + 1;
+      const isStart = currentOrder === 1;
+      const isEnd = currentOrder === orderedPoints.length && orderedPoints.length > 1;
+      const pointType = isStart ? 'Início' : (isEnd ? 'Fim' : 'Parada');
+      const wasReordered = movedWaypointIds.includes(waypointId);
+      const title = currentPoint?.title?.trim() || String(payload.title ?? '').trim() || 'Waypoint';
+      const subtitle =
+        currentPoint?.subtitle?.trim() || String(payload.subtitle ?? '').trim() || undefined;
+
+      setBadge({
+        waypointId,
+        order: currentOrder > 0 ? currentOrder : Number(payload.order ?? 0),
+        pointType,
+        wasReordered,
+        title,
+        subtitle
+      });
     }
-  }, []);
+  }, [movedWaypointIds, orderedPoints]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -354,7 +373,7 @@ export function MapScreen({ route, navigation }: Props) {
   const onConfirmOrder = async () => {
     setConfirmDisabled(true);
     try {
-      setLoading(true);
+      setConfirmLoading(true);
       const changedIds = [...new Set(
         movedWaypointIds
           .map((value) => Math.trunc(Number(value)))
@@ -383,7 +402,28 @@ export function MapScreen({ route, navigation }: Props) {
     } catch (error) {
       Alert.alert('Erro ao confirmar ordem', getApiError(error));
     } finally {
-      setLoading(false);
+      setConfirmLoading(false);
+    }
+  };
+
+  const onRestoreOriginalOrder = async () => {
+    try {
+      setRestoreLoading(true);
+      const waypointsFromDb = await listRouteWaypoints(route.params.routeId);
+      const sortedWaypoints = [...waypointsFromDb].sort((a, b) => a.seq_order - b.seq_order);
+      setMapWaypoints(sortedWaypoints);
+      setMapRenderKey((prev) => prev + 1);
+      setMovedWaypointIds([]);
+      setConfirmDisabled(true);
+      setBadge(null);
+      cacheRouteWaypointOrder(
+        route.params.routeId,
+        sortedWaypoints.map((waypoint) => waypoint.id)
+      );
+    } catch (error) {
+      Alert.alert('Erro ao restaurar ordem', getApiError(error));
+    } finally {
+      setRestoreLoading(false);
     }
   };
 
@@ -391,9 +431,15 @@ export function MapScreen({ route, navigation }: Props) {
     <View style={styles.screen}>
       <View style={styles.mapFull}>
         {Platform.OS === 'web' ? (
-          <WebIFrame srcDoc={webMapHtml} style={styles.webFrame} title="Mapa da rota" />
+          <WebIFrame
+            key={`web-map-${route.params.routeId}-${mapRenderKey}`}
+            srcDoc={webMapHtml}
+            style={styles.webFrame}
+            title="Mapa da rota"
+          />
         ) : (
           <WebView
+            key={`native-map-${route.params.routeId}-${mapRenderKey}`}
             originWhitelist={['*']}
             source={{ html: webMapHtml }}
             style={styles.webFrame}
@@ -438,12 +484,23 @@ export function MapScreen({ route, navigation }: Props) {
         <Text style={styles.bottomHint}>
           Número do pin = ordem da rota. Lilás = Início, vermelho = Fim, laranja = reordenado.
         </Text>
-        <PrimaryButton
-          label="Confirmar ordem"
-          onPress={onConfirmOrder}
-          loading={loading}
-          disabled={confirmDisabled}
-        />
+        <View style={styles.bottomActions}>
+          <PrimaryButton
+            label="Restaurar"
+            variant="neutral"
+            onPress={onRestoreOriginalOrder}
+            loading={restoreLoading}
+            disabled={confirmLoading}
+            style={styles.bottomActionButton}
+          />
+          <PrimaryButton
+            label="Confirmar ordem"
+            onPress={onConfirmOrder}
+            loading={confirmLoading}
+            disabled={confirmDisabled || restoreLoading}
+            style={styles.bottomActionButton}
+          />
+        </View>
       </View>
     </View>
   );
@@ -536,5 +593,12 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     marginBottom: 8
+  },
+  bottomActions: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  bottomActionButton: {
+    flex: 1
   }
 });

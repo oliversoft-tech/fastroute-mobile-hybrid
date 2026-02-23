@@ -185,7 +185,9 @@ export function RouteDetailScreen({ route, navigation }: Props) {
               >
                 <View style={styles.waypointTop}>
                   <View style={styles.waypointTextColumn}>
-                    <Text style={styles.waypointTitle}>{meta.title}</Text>
+                    <Text style={styles.waypointTitle}>
+                      #{waypoint.seq_order} • {meta.title}
+                    </Text>
                     {meta.subtitle ? <Text style={styles.waypointSub}>{meta.subtitle}</Text> : null}
                   </View>
                   <StatusBadge status={waypoint.status} type="waypoint" />

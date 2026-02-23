@@ -1,4 +1,4 @@
-export type RouteStatus = 'PENDENTE' | 'EM_ROTA' | 'FINALIZADA';
+export type RouteStatus = 'PENDENTE' | 'CRIADA' | 'EM_ROTA' | 'EM_ANDAMENTO' | 'FINALIZADA';
 export type WaypointStatus =
   | 'PENDENTE'
   | 'EM_ROTA'

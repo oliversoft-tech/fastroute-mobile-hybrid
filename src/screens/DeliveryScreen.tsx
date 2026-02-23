@@ -49,6 +49,20 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
+  const isPendingWaypoint = currentStatus === 'PENDENTE';
+  const payloadUserId = (() => {
+    const authContextUserId = userId?.trim() ?? '';
+    if (/^\d+$/.test(authContextUserId)) {
+      return authContextUserId;
+    }
+
+    const waypointUserId = Number(waypoint.user_id);
+    if (Number.isFinite(waypointUserId) && waypointUserId > 0) {
+      return String(Math.trunc(waypointUserId));
+    }
+
+    return '';
+  })();
 
   const returnToRouteDetail = () => {
     navigation.dispatch(
@@ -70,6 +84,10 @@ export function DeliveryScreen({ route, navigation }: Props) {
     }
   ) => {
     try {
+      if (!options?.user_id) {
+        throw new Error('user_id do motorista não encontrado na tabela users.');
+      }
+
       setLoading(true);
       setFeedbackError(null);
       setFeedbackSuccess(null);
@@ -89,6 +107,11 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onTakePhoto = async () => {
+    if (!isPendingWaypoint) {
+      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE permitem tirar foto.');
+      return;
+    }
+
     if (Platform.OS === 'web') {
       setFeedbackError(
         'No preview web não há câmera nativa. Abra no app Android/iOS (Expo Go) para tirar a foto.'
@@ -178,6 +201,14 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onConfirmDelivered = () => {
+    if (!isPendingWaypoint) {
+      Alert.alert(
+        'Ação indisponível',
+        'Somente waypoints com status PENDENTE permitem marcar como entregue.'
+      );
+      return;
+    }
+
     if (!hasUploadedPhoto) {
       setShowDeliveredConfirmModal(true);
       return;
@@ -186,20 +217,25 @@ export function DeliveryScreen({ route, navigation }: Props) {
     finishWaypoint('ENTREGUE', {
       obs_falha: '',
       file_name: uploadedPhotoName ?? '',
-      user_id: waypoint.user_id ?? userId ?? '',
+      user_id: payloadUserId,
       address_id: waypoint.address_id,
       image_uri: uploadedPhotoUri ?? undefined
     });
   };
 
   const onConfirmFailure = async () => {
+    if (!isPendingWaypoint) {
+      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE permitem marcar falha.');
+      return;
+    }
+
     const obsFalha = failureObs;
     setShowFailureModal(false);
     setFailureObs('');
     await finishWaypoint(failureStatus, {
       obs_falha: obsFalha,
       file_name: uploadedPhotoName ?? '',
-      user_id: waypoint.user_id ?? userId ?? '',
+      user_id: payloadUserId,
       address_id: waypoint.address_id,
       image_uri: uploadedPhotoUri ?? undefined
     });
@@ -239,7 +275,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="primary"
           onPress={onTakePhoto}
           loading={cameraBusy}
-          disabled={loading}
+          disabled={loading || !isPendingWaypoint}
           style={styles.button}
         />
         <Text style={styles.photoStatus}>
@@ -255,16 +291,25 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="success"
           onPress={onConfirmDelivered}
           loading={loading}
-          disabled={cameraBusy}
+          disabled={cameraBusy || !isPendingWaypoint}
           style={styles.button}
         />
 
         <PrimaryButton
           label="Marcar FALHA"
           variant="danger"
-          onPress={() => setShowFailureModal(true)}
+          onPress={() => {
+            if (!isPendingWaypoint) {
+              Alert.alert(
+                'Ação indisponível',
+                'Somente waypoints com status PENDENTE permitem marcar falha.'
+              );
+              return;
+            }
+            setShowFailureModal(true);
+          }}
           loading={loading}
-          disabled={cameraBusy}
+          disabled={cameraBusy || !isPendingWaypoint}
           style={styles.button}
         />
       </View>
@@ -368,7 +413,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
                   finishWaypoint('ENTREGUE', {
                     obs_falha: '',
                     file_name: uploadedPhotoName ?? '',
-                    user_id: waypoint.user_id ?? userId ?? '',
+                    user_id: payloadUserId,
                     address_id: waypoint.address_id,
                     image_uri: uploadedPhotoUri ?? undefined
                   });

@@ -81,7 +81,8 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   );
 
   const waypoints = routeDetail?.waypoints ?? [];
-  const isRouteInProgress = routeDetail?.status === 'EM_ROTA';
+  const isRouteInProgress =
+    routeDetail?.status === 'EM_ROTA' || routeDetail?.status === 'EM_ANDAMENTO';
 
   const canFinalize = useMemo(() => isRouteInProgress, [isRouteInProgress]);
 

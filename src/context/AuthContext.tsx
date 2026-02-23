@@ -16,6 +16,7 @@ import {
   setTokenRefreshHandler
 } from '../api/httpClient';
 import { refreshWithSupabase } from '../api/supabaseClient';
+import { resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/authStorage';
 
 interface AuthState {
@@ -54,11 +55,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        let resolvedUserId = session.userId ?? null;
+        try {
+          const userIdFromUsersTable = await resolveDriverUserIdFromAuthId(session.userId ?? null);
+          if (userIdFromUsersTable) {
+            resolvedUserId = userIdFromUsersTable;
+          }
+        } catch {
+          // Mantém o userId salvo localmente se a consulta ao Supabase falhar.
+        }
+
         setUserEmail(session.email);
-        setUserId(session.userId ?? null);
+        setUserId(resolvedUserId);
         setAuthTokenState(session.token);
         setRefreshTokenState(session.refreshToken ?? null);
         setAuthSessionTokens(session.token, session.refreshToken ?? null);
+
+        if (resolvedUserId !== session.userId) {
+          await saveAuthSession({
+            email: session.email,
+            token: session.token,
+            refreshToken: session.refreshToken ?? null,
+            userId: resolvedUserId
+          });
+        }
       } finally {
         setIsReady(true);
       }
@@ -69,14 +89,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const tokens = await loginRequest(email, password);
+    let resolvedUserId = tokens.userId;
+    try {
+      const userIdFromUsersTable = await resolveDriverUserIdFromAuthId(tokens.userId);
+      if (userIdFromUsersTable) {
+        resolvedUserId = userIdFromUsersTable;
+      }
+    } catch {
+      // Fallback para o user_id recebido no login quando consulta relacional falhar.
+    }
+
     await saveAuthSession({
       email,
       token: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      userId: tokens.userId
+      userId: resolvedUserId
     });
     setUserEmail(email);
-    setUserId(tokens.userId);
+    setUserId(resolvedUserId);
     setAuthTokenState(tokens.accessToken);
     setRefreshTokenState(tokens.refreshToken);
     setAuthSessionTokens(tokens.accessToken, tokens.refreshToken);

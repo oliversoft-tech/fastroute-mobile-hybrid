@@ -1,6 +1,7 @@
 import { Route, RouteDetail, Waypoint, WaypointStatus } from './types';
-import { authorizedFetch, httpClient } from './httpClient';
+import { authorizedFetch, httpClient, refreshAccessTokenIfPossible } from './httpClient';
 import {
+  getRouteMetadataFromSupabase,
   enrichWaypointsWithAddressData,
   listRouteWaypointsFromSupabase,
   updateRouteWaypointStatusInSupabase
@@ -137,8 +138,12 @@ function mapRouteStatus(value: unknown): Route['status'] {
     .trim()
     .toUpperCase();
 
-  if (normalized.includes('EM_ROTA') || normalized.includes('EM ANDAMENTO') || normalized.includes('ANDAMENTO')) {
-    return 'EM_ROTA';
+  if (normalized.includes('CRIADA')) {
+    return 'CRIADA';
+  }
+
+  if (normalized.includes('EM_ROTA') || normalized.includes('EM ANDAMENTO') || normalized.includes('EM_ANDAMENTO') || normalized.includes('ANDAMENTO')) {
+    return 'EM_ANDAMENTO';
   }
 
   if (normalized.includes('FINAL') || normalized.includes('ENTREGUE') || normalized.includes('CONCLUID')) {
@@ -434,20 +439,33 @@ export async function listRoutes() {
 
 export async function getRouteDetails(routeId: number) {
   const [route] = await fetchRoutes(routeId);
+  let routeMetadata: Awaited<ReturnType<typeof getRouteMetadataFromSupabase>> | null = null;
+  try {
+    routeMetadata = await getRouteMetadataFromSupabase(routeId);
+  } catch {
+    // Mantém fallback via payload do webhook quando metadata da rota não estiver disponível.
+  }
+
   try {
     const waypointsFromSupabase = await listRouteWaypointsFromSupabase(routeId);
+    const statusFromMetadata = routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : undefined;
+    const createdAtFromMetadata = routeMetadata?.created_at ?? undefined;
+    const clusterIdFromMetadata = routeMetadata?.cluster_id ?? undefined;
     if (route) {
       return {
         ...route,
+        status: statusFromMetadata ?? route.status,
+        created_at: createdAtFromMetadata ?? route.created_at,
+        cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : route.cluster_id,
         waypoints: waypointsFromSupabase
       };
     }
 
     return {
       id: routeId,
-      cluster_id: 0,
-      status: 'PENDENTE' as const,
-      created_at: new Date().toISOString(),
+      cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
+      status: statusFromMetadata ?? ('PENDENTE' as const),
+      created_at: createdAtFromMetadata ?? new Date().toISOString(),
       waypoints: waypointsFromSupabase
     };
   } catch {
@@ -455,11 +473,14 @@ export async function getRouteDetails(routeId: number) {
   }
 
   if (!route) {
+    const statusFromMetadata = routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : undefined;
+    const createdAtFromMetadata = routeMetadata?.created_at ?? undefined;
+    const clusterIdFromMetadata = routeMetadata?.cluster_id ?? undefined;
     return {
       id: routeId,
-      cluster_id: 0,
-      status: 'PENDENTE' as const,
-      created_at: new Date().toISOString(),
+      cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
+      status: statusFromMetadata ?? ('PENDENTE' as const),
+      created_at: createdAtFromMetadata ?? new Date().toISOString(),
       waypoints: []
     };
   }
@@ -473,6 +494,9 @@ export async function getRouteDetails(routeId: number) {
 
   return {
     ...route,
+    status: routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : route.status,
+    created_at: routeMetadata?.created_at ?? route.created_at,
+    cluster_id: Number.isFinite(Number(routeMetadata?.cluster_id)) ? Number(routeMetadata?.cluster_id) : route.cluster_id,
     waypoints: enrichedWaypoints
   };
 }
@@ -496,6 +520,7 @@ export async function listRouteWaypoints(routeId: number) {
 }
 
 export async function startRoute(routeId: number) {
+  await refreshAccessTokenIfPossible();
   const { data } = await httpClient.patch('route/start', null, {
     params: { route_id: routeId }
   });

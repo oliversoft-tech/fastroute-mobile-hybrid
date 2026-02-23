@@ -149,6 +149,19 @@ export function getAuthAccessToken() {
   return currentAccessKey;
 }
 
+export async function refreshAccessTokenIfPossible() {
+  if (!currentRefreshKey || !tokenRefreshHandler) {
+    return currentAccessKey;
+  }
+
+  const renewedAccessToken = await getRefreshedAccessToken();
+  if (!renewedAccessToken) {
+    throw new Error('Sessão expirada.');
+  }
+
+  return renewedAccessToken;
+}
+
 export async function authorizedFetch(url: string, init?: RequestInit) {
   const normalizedInit = init ?? {};
   const headers = new Headers((normalizedInit.headers as HeadersInit | undefined) ?? {});

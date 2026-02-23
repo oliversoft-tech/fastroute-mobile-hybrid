@@ -53,8 +53,8 @@ export function RoutesScreen({ navigation }: Props) {
   };
 
   const routeStats = useMemo(() => {
-    const pending = routes.filter((route) => route.status === 'PENDENTE').length;
-    const active = routes.filter((route) => route.status === 'EM_ROTA').length;
+    const pending = routes.filter((route) => route.status === 'PENDENTE' || route.status === 'CRIADA').length;
+    const active = routes.filter((route) => route.status === 'EM_ROTA' || route.status === 'EM_ANDAMENTO').length;
     return { total: routes.length, pending, active };
   }, [routes]);
 

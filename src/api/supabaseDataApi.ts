@@ -20,6 +20,12 @@ type AddressRow = {
 };
 
 type WaypointPersistStatus = 'PENDENTE' | 'ENTREGUE' | 'FALHA TEMPO ADVERSO' | 'FALHA MORADOR AUSENTE';
+type RouteMetadataRow = {
+  id: number;
+  status: string | null;
+  created_at: string | null;
+  cluster_id: number | null;
+};
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
@@ -48,6 +54,14 @@ function getSupabaseClient() {
 function toNumber(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function toIntegerString(value: unknown): string | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return String(Math.trunc(parsed));
 }
 
 function mapWaypointStatus(value: unknown): WaypointStatus {
@@ -144,6 +158,59 @@ export async function listRouteWaypointsFromSupabase(routeId: number): Promise<W
       longitude: toNumber(address?.longitude)
     };
   });
+}
+
+export async function getRouteMetadataFromSupabase(routeId: number): Promise<{
+  status: string | null;
+  created_at: string | null;
+  cluster_id: number | null;
+} | null> {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('routes')
+    .select('id, status, created_at, cluster_id')
+    .eq('id', routeId)
+    .limit(1);
+
+  if (error) {
+    throw error;
+  }
+
+  const row = (data?.[0] ?? null) as RouteMetadataRow | null;
+  if (!row) {
+    return null;
+  }
+
+  return {
+    status: row.status ?? null,
+    created_at: row.created_at ?? null,
+    cluster_id: row.cluster_id ?? null
+  };
+}
+
+export async function resolveDriverUserIdFromAuthId(authUserId?: string | null) {
+  const normalizedAuthId = authUserId?.trim() ?? '';
+  if (!normalizedAuthId) {
+    return null;
+  }
+
+  if (/^\d+$/.test(normalizedAuthId)) {
+    return normalizedAuthId;
+  }
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('users')
+    .select('id')
+    .eq('auth_user_id', normalizedAuthId)
+    .order('id', { ascending: true })
+    .limit(1);
+
+  if (error) {
+    throw error;
+  }
+
+  return toIntegerString((data?.[0] as { id?: unknown } | undefined)?.id);
 }
 
 export async function enrichWaypointsWithAddressData(waypoints: Waypoint[]): Promise<Waypoint[]> {

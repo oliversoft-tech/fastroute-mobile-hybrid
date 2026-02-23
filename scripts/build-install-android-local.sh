@@ -78,7 +78,8 @@ if [ ! -f "$APK_PATH" ]; then
   exit 1
 fi
 
-adb install -r "$APK_PATH"
+adb uninstall "$PACKAGE_NAME" >/dev/null 2>&1 || true
+adb install "$APK_PATH"
 adb shell am start -n "${PACKAGE_NAME}/.MainActivity" >/dev/null 2>&1 || true
 
 echo "APK local release instalado com sucesso: $APK_PATH"

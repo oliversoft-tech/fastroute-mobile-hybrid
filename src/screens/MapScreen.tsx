@@ -305,6 +305,34 @@ export function MapScreen({ route, navigation }: Props) {
     [initialWaypoints]
   );
 
+  const pointsByKey = useMemo(
+    () => new Map(initialPoints.map((point) => [point.pointKey, point])),
+    [initialPoints]
+  );
+
+  const orderedPoints = useMemo(() => {
+    if (orderedPointKeys.length === 0) {
+      return initialPoints;
+    }
+
+    const usedKeys = new Set<string>();
+    const reordered = orderedPointKeys
+      .map((pointKey) => pointsByKey.get(pointKey))
+      .filter((point): point is (typeof initialPoints)[number] => Boolean(point))
+      .map((point) => {
+        usedKeys.add(point.pointKey);
+        return point;
+      });
+
+    for (const point of initialPoints) {
+      if (!usedKeys.has(point.pointKey)) {
+        reordered.push(point);
+      }
+    }
+
+    return reordered;
+  }, [initialPoints, orderedPointKeys, pointsByKey]);
+
   useEffect(() => {
     setOrderedPointKeys(initialPoints.map((point) => point.pointKey));
     setMovedWaypointIds([]);
@@ -407,8 +435,19 @@ export function MapScreen({ route, navigation }: Props) {
           .map((value) => Math.trunc(Number(value)))
           .filter((value) => Number.isFinite(value))
       )];
-      if (changedIds.length > 0) {
-        await updateWaypointOrder(changedIds);
+      const changedSet = new Set(changedIds);
+      const reorderedWaypoints = orderedPoints
+        .map((point, index) => ({
+          seqorder: index + 1,
+          waypoint_id: point.waypointId
+        }))
+        .filter((entry) => changedSet.has(entry.waypoint_id));
+
+      if (reorderedWaypoints.length > 0) {
+        await updateWaypointOrder({
+          routeId: route.params.routeId,
+          reorderedWaypoints
+        });
       }
 
       navigation.replace('RouteDetail', { routeId: route.params.routeId });

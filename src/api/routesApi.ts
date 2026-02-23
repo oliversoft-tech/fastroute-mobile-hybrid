@@ -489,12 +489,29 @@ export async function updateWaypointStatus(
   });
 }
 
-export async function updateWaypointOrder(waypointIds: number[]) {
-  const orderedIds = waypointIds
-    .map((value) => Math.trunc(Number(value)))
-    .filter((value) => Number.isFinite(value));
+export async function updateWaypointOrder(params: {
+  routeId: number;
+  reorderedWaypoints: Array<{
+    seqorder: number;
+    waypoint_id: number;
+  }>;
+}) {
+  const routeId = Math.trunc(Number(params.routeId));
+  const reorderedWaypoints = params.reorderedWaypoints
+    .map((item) => ({
+      seqorder: Math.trunc(Number(item.seqorder)),
+      waypoint_id: Math.trunc(Number(item.waypoint_id))
+    }))
+    .filter(
+      (item) =>
+        Number.isFinite(item.seqorder) &&
+        item.seqorder > 0 &&
+        Number.isFinite(item.waypoint_id) &&
+        item.waypoint_id > 0
+    );
 
-  await httpClient.patch('waypoint/order', {
-    waypoint_ids: orderedIds
+  await httpClient.patch('waypoint/reorder', {
+    route_id: routeId,
+    reordered_waypoints: reorderedWaypoints
   });
 }

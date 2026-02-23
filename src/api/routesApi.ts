@@ -293,7 +293,7 @@ function normalizeRoute(raw: ApiObject, index: number): RouteDetail {
 async function fetchRoutes(routeId?: number) {
   const endpoints = ['route', 'routes'];
   const paramsOptions = routeId
-    ? [{ route_id: routeId }, { 'route-id': routeId }, { routeId }, { id: routeId }]
+    ? [{ route_id: routeId }, { 'route-id': routeId }, { routeId }, { id: routeId }, undefined]
     : [undefined];
 
   let firstError: unknown = null;
@@ -307,8 +307,16 @@ async function fetchRoutes(routeId?: number) {
         hadSuccessfulResponse = true;
         const normalized = extractCollection(data).map(normalizeRoute);
 
-        if (routeId && normalized.length > 0) {
-          return normalized;
+        if (routeId) {
+          const exactMatch = normalized.filter((entry) => entry.id === routeId);
+          if (exactMatch.length > 0) {
+            return exactMatch;
+          }
+
+          if (normalized.length > bestList.length) {
+            bestList = normalized;
+          }
+          continue;
         }
 
         if (!routeId && normalized.length > bestList.length) {
@@ -326,7 +334,7 @@ async function fetchRoutes(routeId?: number) {
     if (firstError && !hadSuccessfulResponse) {
       throw firstError;
     }
-    return [];
+    return bestList.filter((entry) => entry.id === routeId);
   }
 
   if (bestList.length > 0) {

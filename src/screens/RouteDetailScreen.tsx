@@ -44,11 +44,17 @@ export function RouteDetailScreen({ route, navigation }: Props) {
         return;
       }
 
-      const waypoints = await listRouteWaypoints(routeId);
-      setRouteDetail({
-        ...data,
-        waypoints
-      });
+      // Mantem a tela utilizável mesmo se o fallback de waypoints falhar.
+      setRouteDetail(data);
+      try {
+        const waypoints = await listRouteWaypoints(routeId);
+        setRouteDetail({
+          ...data,
+          waypoints
+        });
+      } catch {
+        // Ignora: a rota já foi carregada e pode seguir sem lista de paradas.
+      }
     } catch (error) {
       Alert.alert('Erro ao carregar rota', getApiError(error));
     } finally {

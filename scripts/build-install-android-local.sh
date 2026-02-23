@@ -8,6 +8,7 @@ ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
 SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
 AVD_NAME="${ANDROID_AVD_NAME:-FastRoute_API_34}"
+PACKAGE_NAME="${ANDROID_PACKAGE_NAME:-com.oliverbill.fastroutemobile}"
 
 export ANDROID_HOME
 export ANDROID_SDK_ROOT="$SDK_ROOT"
@@ -29,6 +30,14 @@ if ! avdmanager list avd | rg -q "Name: ${AVD_NAME}"; then
   exit 1
 fi
 
+if [ ! -d android ]; then
+  CI=1 npx expo prebuild -p android
+fi
+
+cat > android/local.properties <<EOF
+sdk.dir=${ANDROID_HOME}
+EOF
+
 if ! adb devices | rg -q "emulator-.*device"; then
   nohup emulator \
     -avd "$AVD_NAME" \
@@ -41,7 +50,7 @@ if ! adb devices | rg -q "emulator-.*device"; then
     -netspeed full >/tmp/android-emulator.log 2>&1 &
 fi
 
-for _ in {1..120}; do
+for _ in {1..180}; do
   if adb devices | rg -q "emulator-.*device"; then
     BOOTED="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
     if [[ "$BOOTED" == "1" ]]; then
@@ -56,6 +65,20 @@ if ! adb devices | rg -q "emulator-.*device"; then
   exit 1
 fi
 
-adb shell am start -n com.oliverbill.fastroutemobile/.MainActivity >/dev/null 2>&1 || true
+# Garante que nenhum servidor Metro fique rodando.
+pkill -f "expo start|metro|react-native start" || true
 
-echo "Android emulator pronto (sem Metro)."
+pushd android >/dev/null
+CI=1 NODE_ENV=production ./gradlew assembleRelease
+popd >/dev/null
+
+APK_PATH="$PROJECT_DIR/android/app/build/outputs/apk/release/app-release.apk"
+if [ ! -f "$APK_PATH" ]; then
+  echo "APK release não encontrado em $APK_PATH" >&2
+  exit 1
+fi
+
+adb install -r "$APK_PATH"
+adb shell am start -n "${PACKAGE_NAME}/.MainActivity" >/dev/null 2>&1 || true
+
+echo "APK local release instalado com sucesso: $APK_PATH"

@@ -35,9 +35,10 @@ Refresh de token via Supabase SDK:
 1. Instale dependencias:
    - `npm install`
 2. (Opcional) Copie `.env.example` para `.env` e ajuste a URL.
-3. Rode o app:
+3. Android local (sem Metro em runtime):
+   - `npm run android`
+4. Opcional para desenvolvimento com Metro:
    - `npm run start`
-4. Abra no Expo Go (Android/iOS) ou simulador.
 
 ## Estrutura principal
 

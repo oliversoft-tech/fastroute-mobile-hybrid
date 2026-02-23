@@ -5,7 +5,8 @@
   "main": "expo/AppEntry",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
+    "android": "bash ./scripts/build-install-android-local.sh",
+    "android:dev": "expo run:android",
     "android:sim": "bash ./scripts/start-android-sim.sh",
     "ios": "expo start --ios",
     "web": "expo start --web",

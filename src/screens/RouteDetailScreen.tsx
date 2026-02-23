@@ -26,6 +26,7 @@ import { getWaypointMeta } from '../utils/waypointMeta';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { formatDate } from '../utils/date';
 import { openGoogleMapsRoute } from '../utils/googleMaps';
+import { applyWaypointOrder, getCachedRouteWaypointOrder } from '../state/waypointOrderCache';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RouteDetail'>;
 
@@ -38,23 +39,28 @@ export function RouteDetailScreen({ route, navigation }: Props) {
 
   const loadRouteDetails = useCallback(async () => {
     try {
+      const cachedOrder = getCachedRouteWaypointOrder(routeId);
       const data = await getRouteDetails(routeId);
-      const needsAddressEnrichment = (data.waypoints ?? []).some((waypoint) => {
+      const orderedData = {
+        ...data,
+        waypoints: applyWaypointOrder(data.waypoints ?? [], cachedOrder)
+      };
+      const needsAddressEnrichment = (orderedData.waypoints ?? []).some((waypoint) => {
         const title = waypoint.title?.trim().toLowerCase() ?? '';
         return title.length === 0 || title === 'endereço não informado';
       });
 
-      if (data.waypoints && data.waypoints.length > 0 && !needsAddressEnrichment) {
-        setRouteDetail(data);
+      if (orderedData.waypoints && orderedData.waypoints.length > 0 && !needsAddressEnrichment) {
+        setRouteDetail(orderedData);
         return;
       }
 
       // Mantem a tela utilizável mesmo se o fallback de waypoints falhar.
-      setRouteDetail(data);
+      setRouteDetail(orderedData);
       try {
-        const waypoints = await listRouteWaypoints(routeId);
+        const waypoints = applyWaypointOrder(await listRouteWaypoints(routeId), cachedOrder);
         setRouteDetail({
-          ...data,
+          ...orderedData,
           waypoints
         });
       } catch {

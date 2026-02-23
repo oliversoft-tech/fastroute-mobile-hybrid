@@ -13,6 +13,7 @@
       "supportsTablet": false
     },
     "android": {
+      "package": "com.oliverbill.fastroutemobile",
       "adaptiveIcon": {
         "backgroundColor": "#F3F4F6"
       }
@@ -20,7 +21,15 @@
     "plugins": [
       "expo-document-picker",
       "expo-asset",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {

@@ -7,13 +7,13 @@ cd "$PROJECT_DIR"
 ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
 SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
-AVD_NAME="${ANDROID_AVD_NAME:-Pixel_7_API_35}"
+AVD_NAME="${ANDROID_AVD_NAME:-FastRoute_API_34}"
 PORT="${EXPO_PORT:-8081}"
 
 export ANDROID_HOME
 export ANDROID_SDK_ROOT="$SDK_ROOT"
 export JAVA_HOME
-export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
 if ! command -v adb >/dev/null 2>&1; then
   echo "adb não encontrado. Instale android-platform-tools e configure ANDROID_HOME." >&2
@@ -31,7 +31,15 @@ if ! avdmanager list avd | rg -q "Name: ${AVD_NAME}"; then
 fi
 
 if ! adb devices | rg -q "emulator-.*device"; then
-  nohup emulator -avd "$AVD_NAME" -no-snapshot-save -netdelay none -netspeed full >/tmp/android-emulator.log 2>&1 &
+  nohup emulator \
+    -avd "$AVD_NAME" \
+    -no-snapshot-load \
+    -no-snapshot-save \
+    -gpu swiftshader_indirect \
+    -no-audio \
+    -no-boot-anim \
+    -netdelay none \
+    -netspeed full >/tmp/android-emulator.log 2>&1 &
 fi
 
 for _ in {1..120}; do

@@ -34,6 +34,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [cameraBusy, setCameraBusy] = useState(false);
   const [hasUploadedPhoto, setHasUploadedPhoto] = useState(false);
+  const [uploadedPhotoUri, setUploadedPhotoUri] = useState<string | null>(null);
   const [uploadedPhotoName, setUploadedPhotoName] = useState<string | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
@@ -65,6 +66,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
       file_name?: string;
       user_id?: string | number;
       address_id?: number;
+      image_uri?: string;
     }
   ) => {
     try {
@@ -165,6 +167,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
     setCameraBusy(true);
     setHasUploadedPhoto(true);
+    setUploadedPhotoUri(capturedPhotoUri);
     setUploadedPhotoName(capturedPhotoName);
     setShowCameraModal(false);
     setCapturedPhotoUri(null);
@@ -184,7 +187,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
       obs_falha: '',
       file_name: uploadedPhotoName ?? '',
       user_id: waypoint.user_id ?? userId ?? '',
-      address_id: waypoint.address_id
+      address_id: waypoint.address_id,
+      image_uri: uploadedPhotoUri ?? undefined
     });
   };
 
@@ -196,7 +200,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
       obs_falha: obsFalha,
       file_name: uploadedPhotoName ?? '',
       user_id: waypoint.user_id ?? userId ?? '',
-      address_id: waypoint.address_id
+      address_id: waypoint.address_id,
+      image_uri: uploadedPhotoUri ?? undefined
     });
   };
 
@@ -364,7 +369,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
                     obs_falha: '',
                     file_name: uploadedPhotoName ?? '',
                     user_id: waypoint.user_id ?? userId ?? '',
-                    address_id: waypoint.address_id
+                    address_id: waypoint.address_id,
+                    image_uri: uploadedPhotoUri ?? undefined
                   });
                 }}
                 loading={loading}

@@ -478,21 +478,31 @@ export async function updateWaypointStatus(
     file_name?: string;
     user_id?: string | number;
     address_id?: number;
+    image_uri?: string;
   }
 ) {
   const mappedStatus = mapWaypointFinishStatus(status);
-  const payload: Record<string, unknown> = {
-    waypoint_id: waypointId,
-    status: mappedStatus,
-    file_name: options?.file_name ?? '',
-    obs_falha: options?.obs_falha ?? '',
-    user_id: options?.user_id ?? '',
-    route_id: routeId
-  };
+  const formData = new FormData();
+  const normalizedFileName = options?.file_name?.trim() || `entrega_${waypointId}.jpg`;
+
+  formData.append('waypoint_id', String(waypointId));
+  formData.append('status', String(mappedStatus));
+  formData.append('file_name', options?.image_uri ? normalizedFileName : options?.file_name ?? '');
+  formData.append('obs_falha', options?.obs_falha ?? '');
+  formData.append('user_id', String(options?.user_id ?? ''));
+  formData.append('route_id', String(routeId));
+
+  if (options?.image_uri) {
+    formData.append('image_base64', {
+      uri: options.image_uri,
+      name: normalizedFileName,
+      type: 'image/jpeg'
+    } as any);
+  }
 
   const obsFalha = options?.obs_falha ?? '';
 
-  await httpClient.patch('waypoint/finish', payload);
+  await httpClient.patch('waypoint/finish', formData);
 
   const supabaseStatus = mapWaypointStatusToSupabase(mappedStatus);
   if (!supabaseStatus) {

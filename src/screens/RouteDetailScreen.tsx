@@ -185,9 +185,12 @@ export function RouteDetailScreen({ route, navigation }: Props) {
               >
                 <View style={styles.waypointTop}>
                   <View style={styles.waypointTextColumn}>
-                    <Text style={styles.waypointTitle}>
-                      #{waypoint.seq_order} • {meta.title}
-                    </Text>
+                    <View style={styles.waypointTitleRow}>
+                      <View style={styles.seqBadge}>
+                        <Text style={styles.seqBadgeText}>#{waypoint.seq_order}</Text>
+                      </View>
+                      <Text style={styles.waypointTitle}>{meta.title}</Text>
+                    </View>
                     {meta.subtitle ? <Text style={styles.waypointSub}>{meta.subtitle}</Text> : null}
                   </View>
                   <StatusBadge status={waypoint.status} type="waypoint" />
@@ -287,9 +290,28 @@ const styles = StyleSheet.create({
   waypointTextColumn: {
     flex: 1
   },
+  waypointTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  seqBadge: {
+    borderRadius: 999,
+    backgroundColor: '#EDE9FE',
+    borderWidth: 1,
+    borderColor: '#C4B5FD',
+    paddingHorizontal: 8,
+    paddingVertical: 3
+  },
+  seqBadgeText: {
+    color: '#6D28D9',
+    fontSize: 11,
+    fontWeight: '800'
+  },
   waypointTitle: {
     color: colors.textPrimary,
-    fontWeight: '700'
+    fontWeight: '700',
+    flex: 1
   },
   waypointSub: {
     color: colors.textSecondary,

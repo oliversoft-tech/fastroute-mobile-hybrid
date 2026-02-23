@@ -302,26 +302,24 @@ export function MapScreen({ route, navigation }: Props) {
         return;
       }
 
-      const currentPoint = orderedPoints.find((point) => point.waypointId === waypointId);
-      const currentOrder = orderedPoints.findIndex((point) => point.waypointId === waypointId) + 1;
-      const isStart = currentOrder === 1;
-      const isEnd = currentOrder === orderedPoints.length && orderedPoints.length > 1;
-      const pointType = isStart ? 'Início' : (isEnd ? 'Fim' : 'Parada');
-      const wasReordered = movedWaypointIds.includes(waypointId);
-      const title = currentPoint?.title?.trim() || String(payload.title ?? '').trim() || 'Waypoint';
-      const subtitle =
-        currentPoint?.subtitle?.trim() || String(payload.subtitle ?? '').trim() || undefined;
+      const payloadOrder = Number(payload.order);
+      const currentOrder = Number.isFinite(payloadOrder) ? payloadOrder : 0;
+      const pointType = String(payload.pointType ?? '').trim() || 'Parada';
+      const wasReordered = Boolean(payload.wasReordered) || movedWaypointIds.includes(waypointId);
+      const title = String(payload.title ?? '').trim() || 'Waypoint';
+      const rawSubtitle = String(payload.subtitle ?? '').trim();
+      const subtitle = rawSubtitle.length > 0 ? rawSubtitle : undefined;
 
       setBadge({
         waypointId,
-        order: currentOrder > 0 ? currentOrder : Number(payload.order ?? 0),
+        order: currentOrder,
         pointType,
         wasReordered,
         title,
         subtitle
       });
     }
-  }, [movedWaypointIds, orderedPoints]);
+  }, [movedWaypointIds]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {

@@ -60,7 +60,6 @@ function buildLeafletMapHtml(
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const points = ${payload};
-    const pointByKey = new Map(points.map((point) => [point.pointKey, point]));
     const orderedPointKeys = points.map((point) => point.pointKey);
     const movedPointKeys = new Set();
     const map = L.map('map', { zoomControl: true, attributionControl: true });
@@ -170,6 +169,22 @@ function buildLeafletMapHtml(
       return { changed: false, targetKey: null };
     }
 
+    function findPointByLatLng(latLng) {
+      let closestPoint = null;
+      let minDistance = Infinity;
+
+      points.forEach((point) => {
+        const pointLatLng = L.latLng(point.latitude, point.longitude);
+        const distance = pointLatLng.distanceTo(latLng);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestPoint = point;
+        }
+      });
+
+      return closestPoint;
+    }
+
     function renderMap() {
       markersLayer.clearLayers();
 
@@ -197,8 +212,9 @@ function buildLeafletMapHtml(
           renderMap();
         });
 
-        marker.on('dblclick', () => {
-          const currentPoint = pointByKey.get(point.pointKey) || point;
+        marker.on('dblclick', (event) => {
+          const markerLatLng = event.target.getLatLng();
+          const currentPoint = findPointByLatLng(markerLatLng) || point;
           const currentOrder = getOrder(currentPoint.pointKey);
           const currentIsStart = currentOrder === 1;
           const currentIsEnd = currentOrder === points.length && points.length > 1;

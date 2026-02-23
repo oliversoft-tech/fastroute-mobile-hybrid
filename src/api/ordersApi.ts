@@ -57,6 +57,63 @@ function extractMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+function uniquePositiveIntegers(values: number[]) {
+  return [...new Set(values.filter((value) => Number.isFinite(value) && value > 0).map((value) => Math.trunc(value)))];
+}
+
+function collectRouteIds(payload: unknown, parentKey = ''): number[] {
+  if (payload === null || payload === undefined) {
+    return [];
+  }
+
+  if (Array.isArray(payload)) {
+    return uniquePositiveIntegers(payload.flatMap((entry) => collectRouteIds(entry, parentKey)));
+  }
+
+  if (typeof payload !== 'object') {
+    return [];
+  }
+
+  const record = payload as Record<string, unknown>;
+  const normalizedParent = parentKey.trim().toLowerCase();
+  const collected: number[] = [];
+
+  const directRouteId = Number(record.route_id ?? record.routeId);
+  if (Number.isFinite(directRouteId) && directRouteId > 0) {
+    collected.push(directRouteId);
+  }
+
+  const routeIdsArray = record.route_ids ?? record.routeIds;
+  if (Array.isArray(routeIdsArray)) {
+    for (const entry of routeIdsArray) {
+      const parsed = Number(entry);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        collected.push(parsed);
+      }
+    }
+  }
+
+  // O campo "id" só é aceito se o contexto do objeto for explicitamente de rota.
+  if (normalizedParent.includes('route')) {
+    const contextualId = Number(record.id);
+    if (Number.isFinite(contextualId) && contextualId > 0) {
+      collected.push(contextualId);
+    }
+  }
+
+  for (const [key, value] of Object.entries(record)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+
+    if (typeof value === 'object') {
+      collected.push(...collectRouteIds(value, key));
+    }
+  }
+
+  return uniquePositiveIntegers(collected);
+}
+
 export async function importOrders(file: LocalFile) {
   const formData = new FormData();
 
@@ -89,7 +146,6 @@ export async function importOrders(file: LocalFile) {
   if (typeof data === 'object' && data !== null) {
     const payload = data as ImportResult & {
       routeId?: unknown;
-      id?: unknown;
       route_ids?: unknown[];
       ok?: unknown;
       statusCode?: unknown;
@@ -107,10 +163,8 @@ export async function importOrders(file: LocalFile) {
       throw new Error(extractMessage(payload, 'Falha ao importar o arquivo.'));
     }
 
-    const parsedRouteIds = Array.isArray(payload.route_ids)
-      ? payload.route_ids.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry))
-      : [];
-    const parsedRouteId = Number(payload.route_id ?? payload.routeId ?? payload.id);
+    const parsedRouteIds = collectRouteIds(payload);
+    const parsedRouteId = Number(payload.route_id ?? payload.routeId);
 
     return {
       orders_created: payload.orders_created ?? 0,

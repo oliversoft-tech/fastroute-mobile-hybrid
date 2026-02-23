@@ -91,6 +91,62 @@ function assertWebhookSuccess(payload: unknown, fallbackMessage: string) {
   }
 }
 
+function isAuthMessage(value: unknown) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized.includes('token') ||
+    normalized.includes('jwt') ||
+    normalized.includes('expir') ||
+    normalized.includes('unauthor') ||
+    normalized.includes('não autorizado') ||
+    normalized.includes('nao autorizado') ||
+    normalized.includes('forbidden')
+  );
+}
+
+function isAuthPayloadFailure(payload: unknown): boolean {
+  if (payload === null || payload === undefined) {
+    return false;
+  }
+
+  if (Array.isArray(payload)) {
+    return payload.some((entry) => isAuthPayloadFailure(entry));
+  }
+
+  if (typeof payload !== 'object') {
+    return isAuthMessage(payload);
+  }
+
+  const record = payload as Record<string, unknown>;
+  const statusCode = Number(record.statusCode ?? record.status_code ?? record.code);
+  if (Number.isFinite(statusCode) && (statusCode === 401 || statusCode === 403)) {
+    return true;
+  }
+
+  if (
+    isAuthMessage(record.msg) ||
+    isAuthMessage(record.message) ||
+    isAuthMessage(record.error) ||
+    isAuthMessage(record.hint)
+  ) {
+    return true;
+  }
+
+  return (
+    isAuthPayloadFailure(record.error) ||
+    isAuthPayloadFailure(record.data) ||
+    isAuthPayloadFailure(record.body)
+  );
+}
+
 function pickString(...values: unknown[]) {
   for (const value of values) {
     if (typeof value !== 'string') {
@@ -521,16 +577,30 @@ export async function listRouteWaypoints(routeId: number) {
 
 export async function startRoute(routeId: number) {
   await refreshAccessTokenIfPossible();
-  const { data } = await httpClient.patch('route/start', null, {
+  let { data } = await httpClient.patch('route/start', null, {
     params: { route_id: routeId }
   });
+  if (isAuthPayloadFailure(data)) {
+    await refreshAccessTokenIfPossible();
+    const retry = await httpClient.patch('route/start', null, {
+      params: { route_id: routeId }
+    });
+    data = retry.data;
+  }
   assertWebhookSuccess(data, 'Não foi possível iniciar a rota.');
 }
 
 export async function finishRoute(routeId: number) {
-  const { data } = await httpClient.patch('route/finish', null, {
+  let { data } = await httpClient.patch('route/finish', null, {
     params: { route_id: routeId }
   });
+  if (isAuthPayloadFailure(data)) {
+    await refreshAccessTokenIfPossible();
+    const retry = await httpClient.patch('route/finish', null, {
+      params: { route_id: routeId }
+    });
+    data = retry.data;
+  }
   assertWebhookSuccess(data, 'Não foi possível finalizar a rota.');
 }
 
@@ -589,35 +659,49 @@ export async function updateWaypointStatus(
   }
 ) {
   const mappedStatus = mapWaypointFinishStatus(status);
-  const formData = new FormData();
   const normalizedFileName = options?.file_name?.trim() || `entrega_${waypointId}.jpg`;
+  const buildFormData = () => {
+    const formData = new FormData();
+    formData.append('waypoint_id', String(waypointId));
+    formData.append('status', String(mappedStatus));
+    formData.append('file_name', options?.image_uri ? normalizedFileName : options?.file_name ?? '');
+    formData.append('obs_falha', options?.obs_falha ?? '');
+    formData.append('user_id', String(options?.user_id ?? ''));
+    formData.append('route_id', String(routeId));
 
-  formData.append('waypoint_id', String(waypointId));
-  formData.append('status', String(mappedStatus));
-  formData.append('file_name', options?.image_uri ? normalizedFileName : options?.file_name ?? '');
-  formData.append('obs_falha', options?.obs_falha ?? '');
-  formData.append('user_id', String(options?.user_id ?? ''));
-  formData.append('route_id', String(routeId));
+    if (options?.image_uri) {
+      formData.append('image_base64', {
+        uri: options.image_uri,
+        name: normalizedFileName,
+        type: 'image/jpeg'
+      } as any);
+    }
 
-  if (options?.image_uri) {
-    formData.append('image_base64', {
-      uri: options.image_uri,
-      name: normalizedFileName,
-      type: 'image/jpeg'
-    } as any);
-  }
+    return formData;
+  };
+  const callFinishWaypoint = async () => {
+    const response = await authorizedFetch(buildApiUrl('waypoint/finish'), {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json'
+      },
+      body: buildFormData()
+    });
+    const rawBody = await response.text();
+    const parsedBody = parseApiResponseBody(rawBody);
+    return { response, parsedBody };
+  };
 
   const obsFalha = options?.obs_falha ?? '';
 
-  const response = await authorizedFetch(buildApiUrl('waypoint/finish'), {
-    method: 'PATCH',
-    headers: {
-      Accept: 'application/json'
-    },
-    body: formData
-  });
-  const rawBody = await response.text();
-  const parsedBody = parseApiResponseBody(rawBody);
+  let { response, parsedBody } = await callFinishWaypoint();
+
+  if (response.status === 401 || response.status === 403 || isAuthPayloadFailure(parsedBody)) {
+    await refreshAccessTokenIfPossible();
+    const retryResult = await callFinishWaypoint();
+    response = retryResult.response;
+    parsedBody = retryResult.parsedBody;
+  }
 
   if (!response.ok) {
     throw new Error(pickApiErrorMessage(parsedBody, `Erro HTTP ${response.status}`));

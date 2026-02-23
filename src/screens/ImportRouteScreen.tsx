@@ -53,7 +53,10 @@ export function ImportRouteScreen({ navigation }: Props) {
     }
   };
 
-  const resolveCreatedRouteId = async (payload: ImportResult) => {
+  const resolveCreatedRouteId = async (
+    payload: ImportResult,
+    previousRouteIds: Set<number>
+  ) => {
     if (payload.route_id) {
       return payload.route_id;
     }
@@ -62,12 +65,17 @@ export function ImportRouteScreen({ navigation }: Props) {
       return payload.route_ids[0];
     }
 
-    const routes = await listRoutes();
-    if (routes.length === 0) {
+    const routesAfterImport = await listRoutes();
+    if (routesAfterImport.length === 0) {
       return null;
     }
 
-    const sortedRoutes = [...routes].sort((a, b) => {
+    const candidates = routesAfterImport.filter((entry) => !previousRouteIds.has(entry.id));
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const sortedRoutes = [...candidates].sort((a, b) => {
       const dateA = Date.parse(a.created_at);
       const dateB = Date.parse(b.created_at);
       if (Number.isFinite(dateA) && Number.isFinite(dateB) && dateA !== dateB) {
@@ -88,6 +96,8 @@ export function ImportRouteScreen({ navigation }: Props) {
 
     try {
       setLoading(true);
+      const routesBeforeImport = await listRoutes();
+      const previousRouteIds = new Set(routesBeforeImport.map((entry) => entry.id));
       const payload = await importOrders({
         uri: selectedFile.uri,
         name: selectedFile.name,
@@ -98,9 +108,12 @@ export function ImportRouteScreen({ navigation }: Props) {
       const importedEntry = toRecentFileEntry(selectedFile);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
-      const routeId = await resolveCreatedRouteId(payload);
+      const routeId = await resolveCreatedRouteId(payload, previousRouteIds);
       if (!routeId) {
-        Alert.alert('Importação concluída', 'Pedidos importados com sucesso.');
+        Alert.alert(
+          'Importação concluída',
+          'Pedidos importados com sucesso, mas o backend não retornou o ID da nova rota.'
+        );
         navigation.goBack();
         return;
       }

@@ -139,6 +139,12 @@ function buildLeafletMapHtml(
           return { changed: false, targetKey: null };
         }
 
+        const sourcePoint = points[fromIndex];
+        const targetPoint = points[targetIndex];
+        if (!sourcePoint || !targetPoint) {
+          return { changed: false, targetKey: null };
+        }
+
         const orderFromIndex = orderedPointKeys.findIndex((pointKey) => pointKey === draggedKey);
         const orderTargetIndex = orderedPointKeys.findIndex((pointKey) => pointKey === targetKey);
         if (orderFromIndex < 0 || orderTargetIndex < 0) {
@@ -148,6 +154,16 @@ function buildLeafletMapHtml(
         const sourceOrderKey = orderedPointKeys[orderFromIndex];
         orderedPointKeys[orderFromIndex] = orderedPointKeys[orderTargetIndex];
         orderedPointKeys[orderTargetIndex] = sourceOrderKey;
+
+        // Ao trocar a ordem, troca também a posição geográfica dos dois pontos.
+        // Isso garante que o duplo clique sempre reflita o node atual no mapa.
+        const sourceLat = sourcePoint.latitude;
+        const sourceLng = sourcePoint.longitude;
+        sourcePoint.latitude = targetPoint.latitude;
+        sourcePoint.longitude = targetPoint.longitude;
+        targetPoint.latitude = sourceLat;
+        targetPoint.longitude = sourceLng;
+
         return { changed: true, targetKey };
       }
 

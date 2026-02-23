@@ -9,7 +9,10 @@
     "android:sim": "bash ./scripts/start-android-sim.sh",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eas:build:preview": "eas build -p android --profile preview",
+    "eas:update:preview": "eas update --channel preview",
+    "eas:update:production": "eas update --channel production"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",

@@ -185,5 +185,12 @@ export function getApiError(error: unknown): string {
     }
   }
 
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string' && maybeMessage.trim().length > 0) {
+      return maybeMessage;
+    }
+  }
+
   return 'Não foi possível concluir a operação. Tente novamente.';
 }

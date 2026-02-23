@@ -384,7 +384,13 @@ export async function getRouteDetails(routeId: number) {
     };
   }
 
-  const enrichedWaypoints = await enrichWaypointsWithAddressData(route.waypoints ?? []);
+  let enrichedWaypoints = route.waypoints ?? [];
+  try {
+    enrichedWaypoints = await enrichWaypointsWithAddressData(route.waypoints ?? []);
+  } catch {
+    // Se consulta relacional de endereço falhar, mantém os waypoints vindos do webhook.
+  }
+
   return {
     ...route,
     waypoints: enrichedWaypoints
@@ -402,7 +408,11 @@ export async function listRouteWaypoints(routeId: number) {
   }
 
   const route = await getRouteDetails(routeId);
-  return enrichWaypointsWithAddressData(route.waypoints ?? []);
+  try {
+    return await enrichWaypointsWithAddressData(route.waypoints ?? []);
+  } catch {
+    return route.waypoints ?? [];
+  }
 }
 
 export async function startRoute(routeId: number) {

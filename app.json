@@ -10,7 +10,8 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.oliverbill.fastroutemobile"
     },
     "android": {
       "package": "com.oliverbill.fastroutemobile",

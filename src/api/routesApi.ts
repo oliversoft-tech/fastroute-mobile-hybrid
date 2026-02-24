@@ -577,13 +577,13 @@ export async function listRouteWaypoints(routeId: number) {
 
 export async function startRoute(routeId: number) {
   await refreshAccessTokenIfPossible();
-  let { data } = await httpClient.patch('route/start', null, {
-    params: { route_id: routeId }
+  let { data } = await httpClient.patch('route/start', {
+    route_id: routeId
   });
   if (isAuthPayloadFailure(data)) {
     await refreshAccessTokenIfPossible();
-    const retry = await httpClient.patch('route/start', null, {
-      params: { route_id: routeId }
+    const retry = await httpClient.patch('route/start', {
+      route_id: routeId
     });
     data = retry.data;
   }
@@ -591,13 +591,13 @@ export async function startRoute(routeId: number) {
 }
 
 export async function finishRoute(routeId: number) {
-  let { data } = await httpClient.patch('route/finish', null, {
-    params: { route_id: routeId }
+  let { data } = await httpClient.patch('route/finish', {
+    route_id: routeId
   });
   if (isAuthPayloadFailure(data)) {
     await refreshAccessTokenIfPossible();
-    const retry = await httpClient.patch('route/finish', null, {
-      params: { route_id: routeId }
+    const retry = await httpClient.patch('route/finish', {
+      route_id: routeId
     });
     data = retry.data;
   }

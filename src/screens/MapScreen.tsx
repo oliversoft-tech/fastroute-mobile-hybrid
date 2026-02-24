@@ -5,10 +5,10 @@ import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { getWaypointMeta } from '../utils/waypointMeta';
-import { listRouteWaypoints, updateWaypointOrder } from '../api/routesApi';
+import { getRouteDetails, listRouteWaypoints, updateWaypointOrder } from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { Waypoint } from '../api/types';
+import { RouteStatus, Waypoint } from '../api/types';
 import {
   applyWaypointOrder,
   cacheRouteWaypointOrder,
@@ -290,12 +290,38 @@ export function MapScreen({ route, navigation }: Props) {
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
+  const [routeStatus, setRouteStatus] = useState<RouteStatus | null>(null);
 
   useEffect(() => {
     const cachedOrder = getCachedRouteWaypointOrder(route.params.routeId);
     setMapWaypoints(applyWaypointOrder(waypoints, cachedOrder));
     setMapRenderKey((prev) => prev + 1);
   }, [route.params.routeId, waypoints]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadRouteStatus = async () => {
+      try {
+        const detail = await getRouteDetails(route.params.routeId);
+        if (!isMounted) {
+          return;
+        }
+        setRouteStatus(detail.status);
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+        setRouteStatus(null);
+      }
+    };
+
+    loadRouteStatus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [route.params.routeId]);
 
   const initialPoints = useMemo(
     () =>
@@ -445,8 +471,14 @@ export function MapScreen({ route, navigation }: Props) {
   }, [badge]);
 
   const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
+  const reorderLockedByRouteStatus = routeStatus === 'EM_ANDAMENTO';
 
   const onConfirmOrder = async () => {
+    if (reorderLockedByRouteStatus) {
+      Alert.alert('Ação indisponível', 'Não é possível alterar a ordem de uma rota em andamento.');
+      return;
+    }
+
     try {
       setConfirmLoading(true);
       const changedIds = [...new Set(
@@ -482,6 +514,11 @@ export function MapScreen({ route, navigation }: Props) {
   };
 
   const onRestoreOriginalOrder = async () => {
+    if (reorderLockedByRouteStatus) {
+      Alert.alert('Ação indisponível', 'Não é possível restaurar a ordem de uma rota em andamento.');
+      return;
+    }
+
     try {
       setRestoreLoading(true);
       const waypointsFromDb = await listRouteWaypoints(route.params.routeId);
@@ -564,14 +601,14 @@ export function MapScreen({ route, navigation }: Props) {
             variant="neutral"
             onPress={onRestoreOriginalOrder}
             loading={restoreLoading}
-            disabled={confirmLoading}
+            disabled={confirmLoading || reorderLockedByRouteStatus}
             style={styles.bottomActionButton}
           />
           <PrimaryButton
             label="Confirmar ordem"
             onPress={onConfirmOrder}
             loading={confirmLoading}
-            disabled={restoreLoading}
+            disabled={restoreLoading || reorderLockedByRouteStatus}
             style={styles.bottomActionButton}
           />
         </View>

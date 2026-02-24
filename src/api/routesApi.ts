@@ -14,6 +14,14 @@ interface ApiObject {
   [key: string]: unknown;
 }
 
+function normalizeStatusValue(value: unknown) {
+  return String(value ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+}
+
 function buildApiUrl(path: string) {
   const base = API_BASE_URL.endsWith('/') ? API_BASE_URL : `${API_BASE_URL}/`;
   const normalizedPath = path.replace(/^\/+/, '');
@@ -192,9 +200,7 @@ function tryParseJson(value: unknown): unknown {
 }
 
 function mapRouteStatus(value: unknown): Route['status'] {
-  const normalized = String(value ?? '')
-    .trim()
-    .toUpperCase();
+  const normalized = normalizeStatusValue(value);
 
   if (normalized.includes('CRIADA')) {
     return 'CRIADA';
@@ -212,9 +218,7 @@ function mapRouteStatus(value: unknown): Route['status'] {
 }
 
 function mapWaypointStatus(value: unknown): WaypointStatus {
-  const normalized = String(value ?? '')
-    .trim()
-    .toUpperCase();
+  const normalized = normalizeStatusValue(value);
 
   if (normalized.includes('REORDEN')) {
     return 'REORDENADO';

@@ -290,7 +290,7 @@ export function MapScreen({ route, navigation }: Props) {
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
-  const [routeStatus, setRouteStatus] = useState<RouteStatus | null>(null);
+  const [routeStatus, setRouteStatus] = useState<RouteStatus | null>(route.params.routeStatus ?? null);
 
   useEffect(() => {
     const cachedOrder = getCachedRouteWaypointOrder(route.params.routeId);
@@ -312,7 +312,7 @@ export function MapScreen({ route, navigation }: Props) {
         if (!isMounted) {
           return;
         }
-        setRouteStatus(null);
+        // Mantém o status inicial recebido por navegação quando a consulta falha.
       }
     };
 
@@ -471,7 +471,7 @@ export function MapScreen({ route, navigation }: Props) {
   }, [badge]);
 
   const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
-  const reorderLockedByRouteStatus = routeStatus === 'EM_ANDAMENTO';
+  const reorderLockedByRouteStatus = routeStatus === 'EM_ANDAMENTO' || routeStatus === 'EM_ROTA';
 
   const onConfirmOrder = async () => {
     if (reorderLockedByRouteStatus) {

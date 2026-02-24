@@ -90,9 +90,10 @@ export function RouteDetailScreen({ route, navigation }: Props) {
 
   const waypoints = routeDetail?.waypoints ?? [];
   const canOpenWaypointDetail = routeDetail?.status === 'EM_ANDAMENTO';
+  const isStartDisabled = saving || routeDetail?.status === 'FINALIZADA';
 
   const onStartRoute = async () => {
-    if (startRouteInFlightRef.current || saving) {
+    if (startRouteInFlightRef.current || isStartDisabled) {
       return;
     }
 
@@ -157,13 +158,14 @@ export function RouteDetailScreen({ route, navigation }: Props) {
               <PrimaryButton
                 label="Ver no mapa"
                 variant="neutral"
-                onPress={() => navigation.navigate('Map', { routeId, waypoints })}
+                onPress={() => navigation.navigate('Map', { routeId, waypoints, routeStatus: routeDetail?.status })}
                 style={styles.flexButton}
               />
               <PrimaryButton
                 label="Iniciar"
                 onPress={onStartRoute}
                 loading={saving}
+                disabled={isStartDisabled}
                 style={styles.flexButton}
               />
             </View>

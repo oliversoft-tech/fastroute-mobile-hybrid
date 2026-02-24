@@ -1,4 +1,4 @@
-import { Waypoint } from '../api/types';
+import { RouteStatus, Waypoint } from '../api/types';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -7,5 +7,5 @@ export type RootStackParamList = {
   FileBrowser: undefined;
   RouteDetail: { routeId: number; refreshAt?: number };
   Delivery: { routeId: number; waypoint: Waypoint };
-  Map: { routeId: number; waypoints: Waypoint[] };
+  Map: { routeId: number; waypoints: Waypoint[]; routeStatus?: RouteStatus };
 };

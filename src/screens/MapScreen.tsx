@@ -262,7 +262,6 @@ export function MapScreen({ route, navigation }: Props) {
   const [mapRenderKey, setMapRenderKey] = useState(0);
   const [orderedPointKeys, setOrderedPointKeys] = useState<string[]>([]);
   const [movedWaypointIds, setMovedWaypointIds] = useState<number[]>([]);
-  const [confirmDisabled, setConfirmDisabled] = useState(true);
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [badge, setBadge] = useState<WaypointBadge | null>(null);
@@ -321,7 +320,6 @@ export function MapScreen({ route, navigation }: Props) {
   useEffect(() => {
     setOrderedPointKeys(initialPoints.map((point) => point.pointKey));
     setMovedWaypointIds([]);
-    setConfirmDisabled(true);
   }, [initialPoints]);
 
   const handleMapPayload = useCallback((payload: Record<string, unknown> | null) => {
@@ -339,7 +337,6 @@ export function MapScreen({ route, navigation }: Props) {
             .filter((entry) => Number.isFinite(entry))
         )];
         setMovedWaypointIds(changedIds);
-        setConfirmDisabled(changedIds.length === 0);
       }
     }
 
@@ -416,7 +413,6 @@ export function MapScreen({ route, navigation }: Props) {
   const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
 
   const onConfirmOrder = async () => {
-    setConfirmDisabled(true);
     try {
       setConfirmLoading(true);
       const changedIds = [...new Set(
@@ -459,7 +455,6 @@ export function MapScreen({ route, navigation }: Props) {
       setMapWaypoints(sortedWaypoints);
       setMapRenderKey((prev) => prev + 1);
       setMovedWaypointIds([]);
-      setConfirmDisabled(true);
       setBadge(null);
       cacheRouteWaypointOrder(
         route.params.routeId,
@@ -542,7 +537,7 @@ export function MapScreen({ route, navigation }: Props) {
             label="Confirmar ordem"
             onPress={onConfirmOrder}
             loading={confirmLoading}
-            disabled={confirmDisabled || restoreLoading}
+            disabled={restoreLoading}
             style={styles.bottomActionButton}
           />
         </View>

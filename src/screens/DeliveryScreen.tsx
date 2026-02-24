@@ -31,6 +31,18 @@ import { useAuth } from '../context/AuthContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Delivery'>;
 type FailureStatus = 'FALHA TEMPO ADVERSO' | 'FALHA MORADOR AUSENTE';
+const isOpenWaypointStatus = (status: string) => status === 'PENDENTE' || status === 'EM_ROTA';
+
+function isPendingRouteFinishError(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('pendente') ||
+    normalized.includes('em andamento') ||
+    normalized.includes('nao pode finalizar') ||
+    normalized.includes('não pode finalizar') ||
+    normalized.includes('não foi possível finalizar a rota')
+  );
+}
 
 export function DeliveryScreen({ route, navigation }: Props) {
   const { routeId, waypoint } = route.params;
@@ -123,18 +135,26 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
       // Ao concluir todos os waypoints, finaliza a rota automaticamente.
       let autoFinishWarning: string | null = null;
-      try {
-        const refreshedWaypoints = await listRouteWaypoints(routeId);
-        const hasOpenWaypoints = refreshedWaypoints.some(
-          (item) => item.status === 'PENDENTE' || item.status === 'EM_ROTA'
-        );
+      let refreshedWaypoints: Awaited<ReturnType<typeof listRouteWaypoints>> | null = null;
+      let shouldTryAutoFinish = true;
 
-        if (refreshedWaypoints.length > 0 && !hasOpenWaypoints) {
+      try {
+        refreshedWaypoints = await listRouteWaypoints(routeId);
+        if (refreshedWaypoints.length > 0) {
+          const hasOpenWaypoints = refreshedWaypoints.some((item) => isOpenWaypointStatus(item.status));
+          shouldTryAutoFinish = !hasOpenWaypoints;
+        }
+
+        if (shouldTryAutoFinish) {
           await finishRoute(routeId);
           setFeedbackSuccess('Todos os waypoints finalizados. Rota finalizada automaticamente.');
         }
       } catch (error) {
-        autoFinishWarning = getApiError(error);
+        const message = getApiError(error);
+        const cameWithoutWaypointSnapshot = Array.isArray(refreshedWaypoints) && refreshedWaypoints.length === 0;
+        if (!(cameWithoutWaypointSnapshot && isPendingRouteFinishError(message))) {
+          autoFinishWarning = message;
+        }
       }
 
       returnToRouteDetail();

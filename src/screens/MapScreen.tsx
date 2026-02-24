@@ -62,8 +62,14 @@ function buildLeafletMapHtml(
     const points = ${payload};
     const orderedPointKeys = points.map((point) => point.pointKey);
     const movedPointKeys = new Set();
-    const map = L.map('map', { zoomControl: true, attributionControl: true });
+    const map = L.map('map', {
+      zoomControl: true,
+      attributionControl: true,
+      doubleClickZoom: false
+    });
     const markersLayer = L.layerGroup().addTo(map);
+    let lastTapTimestamp = 0;
+    let lastTapPointKey = '';
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors'
@@ -200,21 +206,7 @@ function buildLeafletMapHtml(
           autoPan: true
         }).addTo(markersLayer);
 
-        marker.on('dragend', (event) => {
-          const result = reorder(point.pointKey, event.target.getLatLng());
-          const changed = result.changed;
-          if (changed) {
-            movedPointKeys.add(point.pointKey);
-            if (result.targetKey) {
-              movedPointKeys.add(result.targetKey);
-            }
-          }
-          renderMap();
-        });
-
-        marker.on('dblclick', (event) => {
-          const markerLatLng = event.target.getLatLng();
-          const currentPoint = findPointByLatLng(markerLatLng) || point;
+        function emitCurrentPointDetails(currentPoint) {
           const currentOrder = getOrder(currentPoint.pointKey);
           const currentIsStart = currentOrder === 1;
           const currentIsEnd = currentOrder === points.length && points.length > 1;
@@ -230,6 +222,39 @@ function buildLeafletMapHtml(
             pointType: currentPointType,
             wasReordered: currentReordered
           });
+        }
+
+        marker.on('dragend', (event) => {
+          const result = reorder(point.pointKey, event.target.getLatLng());
+          const changed = result.changed;
+          if (changed) {
+            movedPointKeys.add(point.pointKey);
+            if (result.targetKey) {
+              movedPointKeys.add(result.targetKey);
+            }
+          }
+          renderMap();
+        });
+
+        marker.on('click', (event) => {
+          const now = Date.now();
+          if (lastTapPointKey === point.pointKey && now - lastTapTimestamp <= 350) {
+            const markerLatLng = event.target.getLatLng();
+            const currentPoint = findPointByLatLng(markerLatLng) || point;
+            emitCurrentPointDetails(currentPoint);
+            lastTapTimestamp = 0;
+            lastTapPointKey = '';
+            return;
+          }
+
+          lastTapTimestamp = now;
+          lastTapPointKey = point.pointKey;
+        });
+
+        marker.on('dblclick', (event) => {
+          const markerLatLng = event.target.getLatLng();
+          const currentPoint = findPointByLatLng(markerLatLng) || point;
+          emitCurrentPointDetails(currentPoint);
         });
 
       });
@@ -276,11 +301,20 @@ export function MapScreen({ route, navigation }: Props) {
     () =>
       mapWaypoints.map((waypoint) => {
         const meta = getWaypointMeta(waypoint);
+        const fallbackDetailedAddress =
+          typeof (waypoint as Waypoint & { detailed_address?: string }).detailed_address === 'string'
+            ? (waypoint as Waypoint & { detailed_address?: string }).detailed_address?.trim()
+            : '';
+        const title =
+          waypoint.title?.trim() ||
+          fallbackDetailedAddress ||
+          meta.title ||
+          `Waypoint #${waypoint.id}`;
         return {
           pointKey: `pin-${waypoint.id}`,
           waypoint,
           waypointId: waypoint.id,
-          title: meta.title,
+          title,
           subtitle: meta.subtitle,
           latitude: meta.latitude,
           longitude: meta.longitude

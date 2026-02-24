@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Modal,
@@ -42,6 +43,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [uploadedPhotoName, setUploadedPhotoName] = useState<string | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [showCameraLoadingHint, setShowCameraLoadingHint] = useState(false);
   const [capturedPhotoUri, setCapturedPhotoUri] = useState<string | null>(null);
   const [capturedPhotoName, setCapturedPhotoName] = useState<string | null>(null);
   const [showFailureModal, setShowFailureModal] = useState(false);
@@ -67,6 +70,21 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
     return '';
   })();
+
+  useEffect(() => {
+    if (!showCameraModal || capturedPhotoUri) {
+      setShowCameraLoadingHint(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      if (!cameraReady && !cameraError) {
+        setShowCameraLoadingHint(true);
+      }
+    }, 1600);
+
+    return () => clearTimeout(timeout);
+  }, [showCameraModal, capturedPhotoUri, cameraReady, cameraError]);
 
   const returnToRouteDetail = () => {
     navigation.dispatch(
@@ -166,6 +184,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
       setCapturedPhotoUri(null);
       setCapturedPhotoName(null);
       setCameraReady(false);
+      setCameraError(null);
+      setShowCameraLoadingHint(false);
       setShowCameraModal(true);
     } catch (error) {
       const message = getApiError(error);
@@ -175,6 +195,11 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onCapturePhoto = async () => {
+    if (cameraError) {
+      Alert.alert('Câmera indisponível', cameraError);
+      return;
+    }
+
     if (!cameraRef.current) {
       Alert.alert('Câmera indisponível', 'Não foi possível acessar a câmera neste momento.');
       return;
@@ -224,6 +249,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
     setShowCameraModal(false);
     setCapturedPhotoUri(null);
     setCapturedPhotoName(null);
+    setCameraError(null);
+    setShowCameraLoadingHint(false);
     setFeedbackSuccess('Foto salva localmente. Será enviada ao confirmar o status.');
     Alert.alert('Foto confirmada', 'Foto salva com sucesso.');
     setCameraBusy(false);
@@ -349,6 +376,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
           setShowCameraModal(false);
           setCapturedPhotoUri(null);
           setCapturedPhotoName(null);
+          setCameraError(null);
+          setShowCameraLoadingHint(false);
         }}
       >
         <View style={styles.cameraContainer}>
@@ -360,8 +389,36 @@ export function DeliveryScreen({ route, navigation }: Props) {
               style={styles.cameraView}
               facing="back"
               onCameraReady={() => setCameraReady(true)}
+              onMountError={(event) => {
+                const message =
+                  event?.message?.trim() ||
+                  'Não foi possível iniciar a câmera neste dispositivo.';
+                setCameraError(message);
+                setCameraReady(false);
+              }}
             />
           )}
+
+          {!capturedPhotoUri && cameraError ? (
+            <View style={styles.cameraOverlay}>
+              <Text style={styles.cameraOverlayError}>{cameraError}</Text>
+              <Text style={styles.cameraOverlayHint}>
+                Se estiver em emulador iOS, a câmera pode não estar disponível.
+              </Text>
+            </View>
+          ) : null}
+
+          {!capturedPhotoUri && !cameraError && !cameraReady ? (
+            <View style={styles.cameraOverlay}>
+              <ActivityIndicator size="large" color="#fff" />
+              <Text style={styles.cameraOverlayText}>Iniciando câmera...</Text>
+              {showCameraLoadingHint ? (
+                <Text style={styles.cameraOverlayHint}>
+                  A prévia pode demorar no iOS. Se continuar sem imagem, feche e abra novamente.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
 
           <View style={styles.cameraActions}>
             {capturedPhotoUri ? (
@@ -393,6 +450,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
                     setShowCameraModal(false);
                     setCapturedPhotoUri(null);
                     setCapturedPhotoName(null);
+                    setCameraError(null);
+                    setShowCameraLoadingHint(false);
                   }}
                   disabled={cameraBusy}
                   style={styles.cameraActionButton}
@@ -577,6 +636,32 @@ const styles = StyleSheet.create({
     gap: 8,
     zIndex: 20,
     elevation: 20
+  },
+  cameraOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24
+  },
+  cameraOverlayText: {
+    color: '#fff',
+    marginTop: 12,
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center'
+  },
+  cameraOverlayHint: {
+    color: '#E4E7EC',
+    marginTop: 8,
+    fontSize: 13,
+    textAlign: 'center'
+  },
+  cameraOverlayError: {
+    color: '#FECACA',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center'
   },
   cameraActionButton: {
     flex: 1

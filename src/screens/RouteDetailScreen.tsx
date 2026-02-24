@@ -41,30 +41,38 @@ export function RouteDetailScreen({ route, navigation }: Props) {
     try {
       const cachedOrder = getCachedRouteWaypointOrder(routeId);
       const data = await getRouteDetails(routeId);
-      const orderedData = {
-        ...data,
-        waypoints: applyWaypointOrder(data.waypoints ?? [], cachedOrder)
-      };
-      const needsAddressEnrichment = (orderedData.waypoints ?? []).some((waypoint) => {
-        const title = waypoint.title?.trim().toLowerCase() ?? '';
-        return title.length === 0 || title === 'endereço não informado';
-      });
-
-      if (orderedData.waypoints && orderedData.waypoints.length > 0 && !needsAddressEnrichment) {
-        setRouteDetail(orderedData);
-        return;
+      try {
+        // Prioriza a origem relacional para refletir status real dos waypoints após reordenação.
+        const authoritativeWaypoints = await listRouteWaypoints(routeId);
+        if (authoritativeWaypoints.length > 0) {
+          const waypoints = applyWaypointOrder(authoritativeWaypoints, cachedOrder);
+          setRouteDetail({
+            ...data,
+            waypoints_count: waypoints.length,
+            waypoints
+          });
+          return;
+        }
+      } catch {
+        // fallback para payload da rota
       }
 
-      // Mantem a tela utilizável mesmo se o fallback de waypoints falhar.
-      setRouteDetail(orderedData);
+      const fallbackWaypoints = applyWaypointOrder(data.waypoints ?? [], cachedOrder);
+      setRouteDetail({
+        ...data,
+        waypoints_count: fallbackWaypoints.length,
+        waypoints: fallbackWaypoints
+      });
+
       try {
         const waypoints = applyWaypointOrder(await listRouteWaypoints(routeId), cachedOrder);
         setRouteDetail({
-          ...orderedData,
+          ...data,
+          waypoints_count: waypoints.length,
           waypoints
         });
       } catch {
-        // Ignora: a rota já foi carregada e pode seguir sem lista de paradas.
+        // Ignora: já existe fallback renderizado.
       }
     } catch (error) {
       Alert.alert('Erro ao carregar rota', getApiError(error));

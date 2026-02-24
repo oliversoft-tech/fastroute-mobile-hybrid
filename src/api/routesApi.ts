@@ -216,6 +216,10 @@ function mapWaypointStatus(value: unknown): WaypointStatus {
     .trim()
     .toUpperCase();
 
+  if (normalized.includes('REORDEN')) {
+    return 'REORDENADO';
+  }
+
   if (normalized.includes('FALHA TEMPO ADVERSO')) {
     return 'FALHA TEMPO ADVERSO';
   }
@@ -687,6 +691,10 @@ export type WaypointFinishStatus =
 function mapWaypointFinishStatus(status: WaypointFinishStatus) {
   if (status === 'CONCLUIDO' || status === 'ENTREGUE') {
     return 'ENTREGUE';
+  }
+
+  if (status === 'REORDENADO') {
+    return 'PENDENTE';
   }
 
   if (status === 'EM_ROTA') {

@@ -21,6 +21,8 @@ export function getWaypointStatusLabel(status: WaypointStatus) {
   switch (status) {
     case 'PENDENTE':
       return 'PENDENTE';
+    case 'REORDENADO':
+      return 'REORDENADO';
     case 'EM_ROTA':
       return 'EM ROTA';
     case 'CONCLUIDO':
@@ -45,6 +47,8 @@ export function getStatusColor(status: RouteStatus | WaypointStatus) {
     case 'CRIADA':
     case 'PENDENTE':
       return colors.warning;
+    case 'REORDENADO':
+      return colors.primary;
     case 'FALHA TEMPO ADVERSO':
     case 'FALHA MORADOR AUSENTE':
       return colors.danger;

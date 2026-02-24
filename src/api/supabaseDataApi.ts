@@ -19,7 +19,12 @@ type AddressRow = {
   longitude: string | number | null;
 };
 
-type WaypointPersistStatus = 'PENDENTE' | 'ENTREGUE' | 'FALHA TEMPO ADVERSO' | 'FALHA MORADOR AUSENTE';
+type WaypointPersistStatus =
+  | 'PENDENTE'
+  | 'REORDENADO'
+  | 'ENTREGUE'
+  | 'FALHA TEMPO ADVERSO'
+  | 'FALHA MORADOR AUSENTE';
 type RouteMetadataRow = {
   id: number;
   status: string | null;
@@ -71,6 +76,10 @@ function mapWaypointStatus(value: unknown): WaypointStatus {
   const normalized = String(value ?? '')
     .trim()
     .toUpperCase();
+
+  if (normalized.includes('REORDEN')) {
+    return 'REORDENADO';
+  }
 
   if (normalized.includes('FALHA TEMPO ADVERSO')) {
     return 'FALHA TEMPO ADVERSO';

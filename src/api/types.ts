@@ -1,6 +1,7 @@
 export type RouteStatus = 'PENDENTE' | 'CRIADA' | 'EM_ROTA' | 'EM_ANDAMENTO' | 'FINALIZADA';
 export type WaypointStatus =
   | 'PENDENTE'
+  | 'REORDENADO'
   | 'EM_ROTA'
   | 'CONCLUIDO'
   | 'FALHA TEMPO ADVERSO'

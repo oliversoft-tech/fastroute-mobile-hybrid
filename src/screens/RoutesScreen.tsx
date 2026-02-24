@@ -117,7 +117,7 @@ export function RoutesScreen({ navigation }: Props) {
               <View style={styles.routeTitleColumn}>
                 <Text style={styles.routeTitle}>Rota #{route.id}</Text>
                 <Text style={styles.routeMeta}>
-                  {route.waypoints?.length ?? 0} waypoints • Criada em {formatDate(route.created_at)}
+                  {route.waypoints_count ?? route.waypoints?.length ?? 0} waypoints • Criada em {formatDate(route.created_at)}
                 </Text>
               </View>
               <StatusBadge status={route.status} type="route" />

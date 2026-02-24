@@ -26,6 +26,9 @@ type RouteMetadataRow = {
   created_at: string | null;
   cluster_id: number | null;
 };
+type RouteWaypointCountRow = {
+  route_id: number | null;
+};
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
@@ -186,6 +189,56 @@ export async function getRouteMetadataFromSupabase(routeId: number): Promise<{
     created_at: row.created_at ?? null,
     cluster_id: row.cluster_id ?? null
   };
+}
+
+export async function listRoutesMetadataFromSupabase(limit = 300): Promise<RouteMetadataRow[]> {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('routes')
+    .select('id, status, created_at, cluster_id')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw error;
+  }
+
+  return ((data ?? []) as RouteMetadataRow[]).filter(
+    (row) => Number.isFinite(Number(row.id)) && Number(row.id) > 0
+  );
+}
+
+export async function listRouteWaypointCountsFromSupabase(routeIds: number[]) {
+  const normalizedIds = [...new Set(
+    routeIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => Math.trunc(value))
+  )];
+  const counts = new Map<number, number>();
+  if (normalizedIds.length === 0) {
+    return counts;
+  }
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('route_waypoints')
+    .select('route_id')
+    .in('route_id', normalizedIds);
+
+  if (error) {
+    throw error;
+  }
+
+  for (const row of (data ?? []) as RouteWaypointCountRow[]) {
+    const routeId = Number(row.route_id);
+    if (!Number.isFinite(routeId) || routeId <= 0) {
+      continue;
+    }
+    counts.set(routeId, (counts.get(routeId) ?? 0) + 1);
+  }
+
+  return counts;
 }
 
 export async function resolveDriverUserIdFromAuthId(authUserId?: string | null) {

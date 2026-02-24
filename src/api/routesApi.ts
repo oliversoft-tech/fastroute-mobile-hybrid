@@ -3,6 +3,8 @@ import { authorizedFetch, httpClient, refreshAccessTokenIfPossible } from './htt
 import {
   getRouteMetadataFromSupabase,
   enrichWaypointsWithAddressData,
+  listRouteWaypointCountsFromSupabase,
+  listRoutesMetadataFromSupabase,
   listRouteWaypointsFromSupabase,
   updateRouteWaypointStatusInSupabase
 } from './supabaseDataApi';
@@ -427,8 +429,20 @@ function normalizeRoute(raw: ApiObject, index: number): RouteDetail {
     cluster_id: toInteger(resolved.cluster_id ?? resolved.clusterId, 0),
     status: mapRouteStatus(resolved.status),
     created_at: String(resolved.created_at ?? resolved.createdAt ?? new Date().toISOString()),
+    waypoints_count: waypoints.length,
     waypoints
   };
+}
+
+function sortRoutesByCreatedAtAndId(routes: RouteDetail[]) {
+  return [...routes].sort((a, b) => {
+    const dateA = Date.parse(a.created_at);
+    const dateB = Date.parse(b.created_at);
+    if (Number.isFinite(dateA) && Number.isFinite(dateB) && dateA !== dateB) {
+      return dateB - dateA;
+    }
+    return b.id - a.id;
+  });
 }
 
 async function fetchRoutes(routeId?: number) {
@@ -490,7 +504,66 @@ async function fetchRoutes(routeId?: number) {
 }
 
 export async function listRoutes() {
-  return fetchRoutes();
+  const webhookRoutes = await fetchRoutes();
+
+  try {
+    const metadataRows = await listRoutesMetadataFromSupabase();
+    if (metadataRows.length === 0) {
+      return sortRoutesByCreatedAtAndId(
+        webhookRoutes.map((route) => ({
+          ...route,
+          waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
+        }))
+      );
+    }
+
+    const routeIds = metadataRows.map((row) => Number(row.id));
+    const waypointCounts = await listRouteWaypointCountsFromSupabase(routeIds);
+    const byId = new Map<number, RouteDetail>(
+      webhookRoutes.map((route) => [
+        route.id,
+        {
+          ...route,
+          waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
+        }
+      ])
+    );
+
+    for (const metadata of metadataRows) {
+      const routeId = Number(metadata.id);
+      if (!Number.isFinite(routeId) || routeId <= 0) {
+        continue;
+      }
+
+      const existing = byId.get(routeId);
+      const mergedStatus = metadata.status
+        ? mapRouteStatus(metadata.status)
+        : (existing?.status ?? ('PENDENTE' as const));
+      const mergedCreatedAt = metadata.created_at ?? existing?.created_at ?? new Date().toISOString();
+      const mergedClusterId = Number.isFinite(Number(metadata.cluster_id))
+        ? Number(metadata.cluster_id)
+        : (existing?.cluster_id ?? 0);
+      const mergedCount = waypointCounts.get(routeId) ?? existing?.waypoints_count ?? existing?.waypoints?.length ?? 0;
+
+      byId.set(routeId, {
+        id: routeId,
+        cluster_id: mergedClusterId,
+        status: mergedStatus,
+        created_at: mergedCreatedAt,
+        waypoints_count: mergedCount,
+        waypoints: existing?.waypoints
+      });
+    }
+
+    return sortRoutesByCreatedAtAndId([...byId.values()]);
+  } catch {
+    return sortRoutesByCreatedAtAndId(
+      webhookRoutes.map((route) => ({
+        ...route,
+        waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
+      }))
+    );
+  }
 }
 
 export async function getRouteDetails(routeId: number) {
@@ -513,6 +586,7 @@ export async function getRouteDetails(routeId: number) {
         status: statusFromMetadata ?? route.status,
         created_at: createdAtFromMetadata ?? route.created_at,
         cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : route.cluster_id,
+        waypoints_count: waypointsFromSupabase.length,
         waypoints: waypointsFromSupabase
       };
     }
@@ -522,6 +596,7 @@ export async function getRouteDetails(routeId: number) {
       cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
       status: statusFromMetadata ?? ('PENDENTE' as const),
       created_at: createdAtFromMetadata ?? new Date().toISOString(),
+      waypoints_count: waypointsFromSupabase.length,
       waypoints: waypointsFromSupabase
     };
   } catch {
@@ -537,6 +612,7 @@ export async function getRouteDetails(routeId: number) {
       cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
       status: statusFromMetadata ?? ('PENDENTE' as const),
       created_at: createdAtFromMetadata ?? new Date().toISOString(),
+      waypoints_count: 0,
       waypoints: []
     };
   }
@@ -553,6 +629,7 @@ export async function getRouteDetails(routeId: number) {
     status: routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : route.status,
     created_at: routeMetadata?.created_at ?? route.created_at,
     cluster_id: Number.isFinite(Number(routeMetadata?.cluster_id)) ? Number(routeMetadata?.cluster_id) : route.cluster_id,
+    waypoints_count: enrichedWaypoints.length,
     waypoints: enrichedWaypoints
   };
 }
@@ -568,10 +645,14 @@ export async function listRouteWaypoints(routeId: number) {
   }
 
   const route = await getRouteDetails(routeId);
+  const fallbackWaypoints = (route.waypoints ?? []).filter((waypoint) => {
+    const normalizedRouteId = Number(waypoint.route_id);
+    return !Number.isFinite(normalizedRouteId) || normalizedRouteId === routeId;
+  });
   try {
-    return await enrichWaypointsWithAddressData(route.waypoints ?? []);
+    return await enrichWaypointsWithAddressData(fallbackWaypoints);
   } catch {
-    return route.waypoints ?? [];
+    return fallbackWaypoints;
   }
 }
 

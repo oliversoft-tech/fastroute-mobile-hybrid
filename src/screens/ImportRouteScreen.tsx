@@ -15,7 +15,8 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { importOrders } from '../api/ordersApi';
 import { getApiError } from '../api/httpClient';
 import { ImportResult } from '../api/types';
-import { getRouteDetails, listRouteWaypoints, listRoutes } from '../api/routesApi';
+import { listRouteWaypoints, listRoutes } from '../api/routesApi';
+import { listRouteWaypointsFromSupabase } from '../api/supabaseDataApi';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -53,16 +54,51 @@ export function ImportRouteScreen({ navigation }: Props) {
     }
   };
 
+  const delay = (ms: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
+
+  const loadImportedRouteWaypoints = async (routeId: number) => {
+    const normalizedRouteId = Math.trunc(Number(routeId));
+    if (!Number.isFinite(normalizedRouteId) || normalizedRouteId <= 0) {
+      return [] as Awaited<ReturnType<typeof listRouteWaypoints>>;
+    }
+
+    // Após importar, aguarda a persistência relacional no banco para abrir o mapa correto.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const fromSupabase = await listRouteWaypointsFromSupabase(normalizedRouteId);
+      if (fromSupabase.length > 0) {
+        return fromSupabase;
+      }
+      await delay(450);
+    }
+
+    const fallback = await listRouteWaypoints(normalizedRouteId);
+    return fallback.filter((waypoint) => {
+      const waypointRouteId = Number(waypoint.route_id);
+      return !Number.isFinite(waypointRouteId) || waypointRouteId === normalizedRouteId;
+    });
+  };
+
   const resolveCreatedRouteId = async (
     payload: ImportResult,
     previousRouteIds: Set<number>
   ) => {
-    if (payload.route_id) {
-      return payload.route_id;
+    const payloadCandidates = [
+      payload.route_id,
+      ...(payload.route_ids ?? [])
+    ]
+      .map((entry) => Number(entry))
+      .filter((entry) => Number.isFinite(entry) && entry > 0)
+      .map((entry) => Math.trunc(entry));
+    const uniquePayloadCandidates = [...new Set(payloadCandidates)];
+    const newRouteFromPayload = uniquePayloadCandidates.find((entry) => !previousRouteIds.has(entry));
+    if (newRouteFromPayload) {
+      return newRouteFromPayload;
     }
-
-    if (payload.route_ids && payload.route_ids.length > 0) {
-      return payload.route_ids[0];
+    if (uniquePayloadCandidates.length === 1) {
+      return uniquePayloadCandidates[0];
     }
 
     const routesAfterImport = await listRoutes();
@@ -118,11 +154,7 @@ export function ImportRouteScreen({ navigation }: Props) {
         return;
       }
 
-      const detail = await getRouteDetails(routeId);
-      const waypoints =
-        detail.waypoints && detail.waypoints.length > 0
-          ? detail.waypoints
-          : await listRouteWaypoints(routeId);
+      const waypoints = await loadImportedRouteWaypoints(routeId);
 
       if (waypoints.length === 0) {
         Alert.alert('Importação concluída', 'Rota criada, mas sem waypoints para reordenação.');

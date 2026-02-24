@@ -11,6 +11,7 @@ export interface Route {
   cluster_id: number;
   status: RouteStatus;
   created_at: string;
+  waypoints_count?: number;
 }
 
 export interface Waypoint {

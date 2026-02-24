@@ -824,9 +824,19 @@ export async function updateWaypointOrder(params: {
         item.waypoint_id > 0
     );
 
-  const { data } = await httpClient.patch('waypoint/reorder', {
+  let { data } = await httpClient.patch('waypoint/reorder', {
     route_id: routeId,
     reordered_waypoints: reorderedWaypoints
   });
+
+  if (isAuthPayloadFailure(data)) {
+    await refreshAccessTokenIfPossible();
+    const retry = await httpClient.patch('waypoint/reorder', {
+      route_id: routeId,
+      reordered_waypoints: reorderedWaypoints
+    });
+    data = retry.data;
+  }
+
   assertWebhookSuccess(data, 'Não foi possível reordenar os waypoints.');
 }

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -36,6 +36,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const startRouteInFlightRef = useRef(false);
 
   const loadRouteDetails = useCallback(async () => {
     try {
@@ -87,6 +88,11 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const canFinalize = useMemo(() => isRouteInProgress, [isRouteInProgress]);
 
   const onStartRoute = async () => {
+    if (startRouteInFlightRef.current || saving) {
+      return;
+    }
+
+    startRouteInFlightRef.current = true;
     try {
       setSaving(true);
       await startRoute(routeId);
@@ -100,6 +106,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
     } catch (error) {
       Alert.alert('Erro ao iniciar rota', getApiError(error));
     } finally {
+      startRouteInFlightRef.current = false;
       setSaving(false);
     }
   };

@@ -577,16 +577,9 @@ export async function listRouteWaypoints(routeId: number) {
 
 export async function startRoute(routeId: number) {
   await refreshAccessTokenIfPossible();
-  let { data } = await httpClient.patch('route/start', {
+  const { data } = await httpClient.patch('route/start', {
     route_id: routeId
   });
-  if (isAuthPayloadFailure(data)) {
-    await refreshAccessTokenIfPossible();
-    const retry = await httpClient.patch('route/start', {
-      route_id: routeId
-    });
-    data = retry.data;
-  }
   assertWebhookSuccess(data, 'Não foi possível iniciar a rota.');
 }
 

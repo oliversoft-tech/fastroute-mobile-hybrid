@@ -89,6 +89,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   );
 
   const waypoints = routeDetail?.waypoints ?? [];
+  const canOpenWaypointDetail = routeDetail?.status === 'EM_ANDAMENTO';
 
   const onStartRoute = async () => {
     if (startRouteInFlightRef.current || saving) {
@@ -178,6 +179,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
                 key={waypoint.id}
                 style={styles.waypointCard}
                 onPress={() => onWaypointPress(waypoint)}
+                disabled={!canOpenWaypointDetail}
               >
                 <View style={styles.waypointTop}>
                   <View style={styles.waypointTextColumn}>

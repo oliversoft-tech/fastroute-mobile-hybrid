@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,6 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import {
-  finishRoute,
   getRouteDetails,
   listRouteWaypoints,
   startRoute
@@ -82,10 +81,6 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   );
 
   const waypoints = routeDetail?.waypoints ?? [];
-  const isRouteInProgress =
-    routeDetail?.status === 'EM_ROTA' || routeDetail?.status === 'EM_ANDAMENTO';
-
-  const canFinalize = useMemo(() => isRouteInProgress, [isRouteInProgress]);
 
   const onStartRoute = async () => {
     if (startRouteInFlightRef.current || saving) {
@@ -107,19 +102,6 @@ export function RouteDetailScreen({ route, navigation }: Props) {
       Alert.alert('Erro ao iniciar rota', getApiError(error));
     } finally {
       startRouteInFlightRef.current = false;
-      setSaving(false);
-    }
-  };
-
-  const onFinalize = async () => {
-    try {
-      setSaving(true);
-      await finishRoute(routeId);
-      Alert.alert('Finalização enviada', `Solicitação de finalização da rota #${routeId} enviada.`);
-      navigation.goBack();
-    } catch (error) {
-      Alert.alert('Erro ao finalizar rota', getApiError(error));
-    } finally {
       setSaving(false);
     }
   };
@@ -205,14 +187,6 @@ export function RouteDetailScreen({ route, navigation }: Props) {
             );
           })}
 
-          <PrimaryButton
-            label="Finalizar rota"
-            variant="danger"
-            onPress={onFinalize}
-            loading={saving}
-            disabled={!canFinalize}
-            style={styles.finalButton}
-          />
         </>
       )}
     </ScrollView>
@@ -324,8 +298,5 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     marginTop: 2
-  },
-  finalButton: {
-    marginTop: 8
   }
 });

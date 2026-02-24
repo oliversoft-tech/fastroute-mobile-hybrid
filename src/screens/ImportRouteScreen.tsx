@@ -130,7 +130,10 @@ export function ImportRouteScreen({ navigation }: Props) {
         return;
       }
 
-      Alert.alert('Importação concluída', 'Rota criada. Reordene os waypoints para iniciar.');
+      Alert.alert(
+        'Importação concluída',
+        'Rota Importada com Sucesso. Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.'
+      );
       navigation.replace('Map', {
         routeId,
         waypoints

@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import {
   Alert,
   Image,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -20,7 +19,12 @@ import { colors } from '../theme/colors';
 import { StatusBadge } from '../components/StatusBadge';
 import { getWaypointMeta } from '../utils/waypointMeta';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { updateWaypointStatus, WaypointFinishStatus } from '../api/routesApi';
+import {
+  finishRoute,
+  listRouteWaypoints,
+  updateWaypointStatus,
+  WaypointFinishStatus
+} from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 import { useAuth } from '../context/AuthContext';
 
@@ -92,11 +96,36 @@ export function DeliveryScreen({ route, navigation }: Props) {
       setFeedbackError(null);
       setFeedbackSuccess(null);
       await updateWaypointStatus(routeId, waypoint.id, status, options);
-      if (status === 'CONCLUIDO' || status === 'ENTREGUE') {
-        setCurrentStatus('CONCLUIDO');
-      }
+      const updatedStatus =
+        status === 'CONCLUIDO' || status === 'ENTREGUE'
+          ? 'CONCLUIDO'
+          : status;
+      setCurrentStatus(updatedStatus);
       setFeedbackSuccess('Status atualizado com sucesso.');
+
+      // Ao concluir todos os waypoints, finaliza a rota automaticamente.
+      let autoFinishWarning: string | null = null;
+      try {
+        const refreshedWaypoints = await listRouteWaypoints(routeId);
+        const hasOpenWaypoints = refreshedWaypoints.some(
+          (item) => item.status === 'PENDENTE' || item.status === 'EM_ROTA'
+        );
+
+        if (refreshedWaypoints.length > 0 && !hasOpenWaypoints) {
+          await finishRoute(routeId);
+          setFeedbackSuccess('Todos os waypoints finalizados. Rota finalizada automaticamente.');
+        }
+      } catch (error) {
+        autoFinishWarning = getApiError(error);
+      }
+
       returnToRouteDetail();
+      if (autoFinishWarning) {
+        Alert.alert(
+          'Rota não finalizada automaticamente',
+          `O waypoint foi atualizado, mas houve erro ao finalizar a rota: ${autoFinishWarning}`
+        );
+      }
     } catch (error) {
       const message = getApiError(error);
       setFeedbackError(message);
@@ -241,15 +270,11 @@ export function DeliveryScreen({ route, navigation }: Props) {
     });
   };
 
-  const openInMaps = async () => {
-    const url = `https://www.google.com/maps/search/?api=1&query=${meta.latitude},${meta.longitude}`;
-    const supported = await Linking.canOpenURL(url);
-    if (!supported) {
-      Alert.alert('Maps indisponível', 'Não foi possível abrir o aplicativo de mapas.');
-      return;
-    }
-
-    await Linking.openURL(url);
+  const openInRouteMap = () => {
+    navigation.navigate('Map', {
+      routeId,
+      waypoints: [waypoint]
+    });
   };
 
   return (
@@ -264,9 +289,9 @@ export function DeliveryScreen({ route, navigation }: Props) {
         {meta.subtitle ? <Text style={styles.addressSub}>{meta.subtitle}</Text> : null}
 
         <PrimaryButton
-          label="Abrir no Maps"
+          label="Ver no Mapa"
           variant="primary"
-          onPress={openInMaps}
+          onPress={openInRouteMap}
           style={styles.button}
         />
 

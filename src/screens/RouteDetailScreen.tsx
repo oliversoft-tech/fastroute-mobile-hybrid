@@ -129,12 +129,14 @@ export function RouteDetailScreen({ route, navigation }: Props) {
         };
       });
       await loadRouteDetails();
-      if (waypoints.length === 0) {
+      const latestWaypoints = await listRouteWaypoints(routeId, { forceRefresh: true });
+
+      if (latestWaypoints.length === 0) {
         Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);
         return;
       }
 
-      await openGoogleMapsRoute(waypoints);
+      await openGoogleMapsRoute(latestWaypoints);
     } catch (error) {
       Alert.alert('Erro ao iniciar rota', getApiError(error));
     } finally {

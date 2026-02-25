@@ -13,7 +13,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
-import { listRoutes } from '../api/routesApi';
+import { deleteRoute, listRoutes } from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 import { RouteDetail } from '../api/types';
 import { StatusBadge } from '../components/StatusBadge';
@@ -29,6 +29,7 @@ export function RoutesScreen({ navigation }: Props) {
   const [routes, setRoutes] = useState<RouteDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [deletingRouteId, setDeletingRouteId] = useState<number | null>(null);
 
   const loadRoutes = useCallback(async (options?: { forceRefresh?: boolean }) => {
     try {
@@ -60,6 +61,39 @@ export function RoutesScreen({ navigation }: Props) {
   const onRefresh = () => {
     setRefreshing(true);
     loadRoutes({ forceRefresh: true });
+  };
+
+  const onDeleteRoute = (routeId: number) => {
+    Alert.alert(
+      'Excluir rota',
+      `Deseja excluir a rota #${routeId}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Excluir',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                setDeletingRouteId(routeId);
+                const result = await deleteRoute(routeId);
+                await loadRoutes({ forceRefresh: true });
+                if (result.queuedForSync) {
+                  Alert.alert(
+                    'Rota removida localmente',
+                    'Exclusão enfileirada para sincronizar com o backend no próximo sync.'
+                  );
+                }
+              } catch (error) {
+                Alert.alert('Falha ao excluir rota', getApiError(error));
+              } finally {
+                setDeletingRouteId(null);
+              }
+            })();
+          }
+        }
+      ]
+    );
   };
 
   const routeStats = useMemo(() => {
@@ -133,7 +167,27 @@ export function RoutesScreen({ navigation }: Props) {
                   {route.waypoints_count ?? route.waypoints?.length ?? 0} waypoints • Criada em {formatDate(route.created_at)}
                 </Text>
               </View>
-              <StatusBadge status={route.status} type="route" />
+              <View style={styles.routeActions}>
+                <StatusBadge status={route.status} type="route" />
+                <TouchableOpacity
+                  style={[
+                    styles.deleteRouteButton,
+                    deletingRouteId === route.id && styles.deleteRouteButtonDisabled
+                  ]}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    if (deletingRouteId !== null) {
+                      return;
+                    }
+                    onDeleteRoute(route.id);
+                  }}
+                  disabled={deletingRouteId !== null}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Excluir rota ${route.id}`}
+                >
+                  <Text style={styles.deleteRouteButtonText}>X</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </TouchableOpacity>
         ))
@@ -261,6 +315,30 @@ const styles = StyleSheet.create({
   },
   routeTitleColumn: {
     flex: 1
+  },
+  routeActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  deleteRouteButton: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#D92D20',
+    backgroundColor: '#FFF0EE',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  deleteRouteButtonDisabled: {
+    opacity: 0.5
+  },
+  deleteRouteButtonText: {
+    color: '#D92D20',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 14
   },
   routeTitle: {
     color: colors.textPrimary,

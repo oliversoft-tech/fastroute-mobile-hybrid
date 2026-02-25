@@ -6,7 +6,8 @@ export type SyncOperationType =
   | 'START_ROUTE'
   | 'FINISH_ROUTE'
   | 'UPDATE_WAYPOINT_STATUS'
-  | 'REORDER_WAYPOINTS';
+  | 'REORDER_WAYPOINTS'
+  | 'DELETE_ROUTE';
 
 export interface SyncQueueItem {
   id: number;
@@ -55,6 +56,10 @@ type QueueRow = {
   created_at: string;
   last_error: string | null;
   retry_count: number | null;
+};
+
+type WaypointPhotoRow = {
+  local_uri: string;
 };
 
 function normalizeRouteStatus(status: unknown): RouteStatus {
@@ -149,6 +154,11 @@ async function ensureSchema(db: SQLiteDatabase) {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_waypoints_route_id ON waypoints(route_id);
+    CREATE TABLE IF NOT EXISTS waypoint_photos (
+      waypoint_id INTEGER PRIMARY KEY NOT NULL,
+      local_uri TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS sync_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       op_type TEXT NOT NULL,
@@ -219,6 +229,8 @@ export async function saveRouteSnapshot(routes: RouteDetail[]) {
         );
       }
     }
+
+    await db.runAsync('DELETE FROM waypoint_photos WHERE waypoint_id NOT IN (SELECT id FROM waypoints)');
   });
 }
 
@@ -373,6 +385,10 @@ export async function replaceLocalRouteWaypoints(routeId: number, waypoints: Way
       now,
       routeId
     );
+    await db.runAsync(
+      `DELETE FROM waypoint_photos
+       WHERE waypoint_id NOT IN (SELECT id FROM waypoints)`
+    );
   });
 }
 
@@ -407,6 +423,42 @@ export async function applyLocalWaypointReorder(
         routeId
       );
     }
+  });
+}
+
+export async function getLocalWaypointPhotoUri(waypointId: number): Promise<string | null> {
+  const db = await getLocalDb();
+  const row = await db.getFirstAsync<WaypointPhotoRow>(
+    'SELECT local_uri FROM waypoint_photos WHERE waypoint_id = ?',
+    waypointId
+  );
+  return row?.local_uri ?? null;
+}
+
+export async function upsertLocalWaypointPhotoUri(waypointId: number, localUri: string) {
+  const db = await getLocalDb();
+  await db.runAsync(
+    `INSERT INTO waypoint_photos (waypoint_id, local_uri, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(waypoint_id) DO UPDATE SET
+       local_uri = excluded.local_uri,
+       updated_at = excluded.updated_at`,
+    waypointId,
+    localUri,
+    new Date().toISOString()
+  );
+}
+
+export async function deleteLocalRoute(routeId: number) {
+  const db = await getLocalDb();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `DELETE FROM waypoint_photos
+       WHERE waypoint_id IN (SELECT id FROM waypoints WHERE route_id = ?)`,
+      routeId
+    );
+    await db.runAsync('DELETE FROM waypoints WHERE route_id = ?', routeId);
+    await db.runAsync('DELETE FROM routes WHERE id = ?', routeId);
   });
 }
 

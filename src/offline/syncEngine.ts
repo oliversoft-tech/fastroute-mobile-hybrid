@@ -2,6 +2,7 @@ import { ImportResult, RouteDetail } from '../api/types';
 import { importOrders as importOrdersRemote } from '../api/ordersRemoteApi';
 import { getAuthAccessToken } from '../api/httpClient';
 import {
+  deleteRoute as deleteRouteRemote,
   finishRoute as finishRouteRemote,
   listRouteWaypoints as listRouteWaypointsRemote,
   listRoutes as listRoutesRemote,
@@ -103,6 +104,14 @@ async function processQueueItem(item: SyncQueueItem) {
     const routeId = Math.trunc(Number(payload.routeId));
     if (Number.isFinite(routeId) && routeId > 0) {
       await finishRouteRemote(routeId);
+    }
+    return;
+  }
+
+  if (item.opType === 'DELETE_ROUTE') {
+    const routeId = Math.trunc(Number(payload.routeId));
+    if (Number.isFinite(routeId) && routeId > 0) {
+      await deleteRouteRemote(routeId);
     }
     return;
   }

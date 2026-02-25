@@ -4,19 +4,29 @@ import {
   isAllowedWaypointTargetStatus,
   validateFinishWaypoint
 } from '@oliverbill/fastroute-domain';
+import * as FileSystem from 'expo-file-system';
 import { RouteDetail, Waypoint, WaypointStatus } from './types';
 import {
   applyLocalWaypointReorder,
+  deleteLocalRoute,
   enqueueSyncOperation,
   getLocalRoute,
+  getLocalWaypointPhotoUri,
   getLocalWaypoint,
   listLocalRoutes,
   listLocalWaypoints,
   replaceLocalRouteWaypoints,
+  upsertLocalWaypointPhotoUri,
   updateLocalRouteStatus,
   updateLocalWaypointStatus,
   upsertLocalRoute
 } from '../offline/localDb';
+import {
+  deleteRoute as deleteRouteRemote,
+  getWaypointPhoto as getWaypointPhotoRemote
+} from './routesRemoteApi';
+import { API_BASE_URL } from '../config/api';
+import { getAuthAccessToken } from './httpClient';
 
 interface QueryCacheOptions {
   forceRefresh?: boolean;
@@ -28,6 +38,10 @@ export type WaypointFinishStatus =
   | 'ENTREGUE'
   | 'FALHA TEMPO ADVERSO'
   | 'FALHA MORADOR AUSENTE';
+
+type DeleteRouteResult = {
+  queuedForSync: boolean;
+};
 
 function normalizeRouteStatus(status: string | undefined) {
   const value = String(status ?? '')
@@ -119,6 +133,78 @@ function ensureRouteExists(route: RouteDetail | null, routeId: number) {
     return route;
   }
   throw new Error(`Rota #${routeId} não encontrada no banco local. Faça sync manual primeiro.`);
+}
+
+function isWaypointDeliveredStatus(status: string | WaypointStatus | undefined) {
+  const normalized = String(status ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+
+  return normalized.includes('ENTREGUE') || normalized.includes('CONCLUID');
+}
+
+function ensureWaypointPhotoDirectory() {
+  const documentDirectory = FileSystem.documentDirectory;
+  if (!documentDirectory) {
+    throw new Error('Diretório local indisponível para salvar foto da entrega.');
+  }
+  return `${documentDirectory}delivery-photos`;
+}
+
+function normalizePhotoFileName(fileName: string, waypointId: number) {
+  const trimmed = fileName.trim();
+  if (!trimmed) {
+    return `entrega_${waypointId}.jpg`;
+  }
+  return trimmed.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function normalizePhotoUrl(rawUrl: string) {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  const base = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${base}${normalizedPath}`;
+}
+
+async function persistWaypointPhotoBase64(
+  waypointId: number,
+  fileName: string,
+  base64: string
+) {
+  const directory = ensureWaypointPhotoDirectory();
+  await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+  const localUri = `${directory}/${normalizePhotoFileName(fileName, waypointId)}`;
+  await FileSystem.writeAsStringAsync(localUri, base64, {
+    encoding: FileSystem.EncodingType.Base64
+  });
+  return localUri;
+}
+
+async function persistWaypointPhotoFromUrl(
+  waypointId: number,
+  fileName: string,
+  rawUrl: string
+) {
+  const directory = ensureWaypointPhotoDirectory();
+  await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+  const localUri = `${directory}/${normalizePhotoFileName(fileName, waypointId)}`;
+  const normalizedUrl = normalizePhotoUrl(rawUrl);
+  const token = getAuthAccessToken();
+  await FileSystem.downloadAsync(normalizedUrl, localUri, {
+    headers: token
+      ? {
+          Authorization: `Bearer ${token}`
+        }
+      : undefined
+  });
+  return localUri;
 }
 
 export async function listRoutes(_options?: QueryCacheOptions) {
@@ -227,6 +313,9 @@ export async function updateWaypointStatus(
 
   const localStatus = mapDomainStatusToLocal(targetStatus);
   await updateLocalWaypointStatus(waypointId, localStatus);
+  if (options?.image_uri) {
+    await upsertLocalWaypointPhotoUri(waypointId, options.image_uri);
+  }
 
   await enqueueSyncOperation('UPDATE_WAYPOINT_STATUS', {
     routeId,
@@ -281,3 +370,51 @@ export async function updateWaypointOrder(params: {
   });
 }
 
+export async function getWaypointDeliveryPhoto(
+  waypointId: number,
+  currentStatus?: string | WaypointStatus
+) {
+  const localPhotoUri = await getLocalWaypointPhotoUri(waypointId);
+  if (localPhotoUri) {
+    return localPhotoUri;
+  }
+
+  if (!isWaypointDeliveredStatus(currentStatus)) {
+    return null;
+  }
+
+  const remotePhoto = await getWaypointPhotoRemote(waypointId);
+  if (!remotePhoto) {
+    return null;
+  }
+
+  let persistedUri: string;
+  if (remotePhoto.kind === 'base64') {
+    persistedUri = await persistWaypointPhotoBase64(
+      waypointId,
+      remotePhoto.fileName,
+      remotePhoto.base64
+    );
+  } else {
+    persistedUri = await persistWaypointPhotoFromUrl(
+      waypointId,
+      remotePhoto.fileName,
+      remotePhoto.url
+    );
+  }
+
+  await upsertLocalWaypointPhotoUri(waypointId, persistedUri);
+  return persistedUri;
+}
+
+export async function deleteRoute(routeId: number): Promise<DeleteRouteResult> {
+  await deleteLocalRoute(routeId);
+
+  try {
+    await deleteRouteRemote(routeId);
+    return { queuedForSync: false };
+  } catch {
+    await enqueueSyncOperation('DELETE_ROUTE', { routeId });
+    return { queuedForSync: true };
+  }
+}

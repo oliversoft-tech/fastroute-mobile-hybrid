@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { StackActions } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as FileSystem from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -22,6 +23,7 @@ import { getWaypointMeta } from '../utils/waypointMeta';
 import { PrimaryButton } from '../components/PrimaryButton';
 import {
   finishRoute,
+  getWaypointDeliveryPhoto,
   listRouteWaypoints,
   updateWaypointStatus,
   WaypointFinishStatus
@@ -46,6 +48,11 @@ const isFinishedWaypointStatus = (status: string) => {
     normalized.includes('FALHA TEMPO ADVERSO') ||
     normalized.includes('FALHA MORADOR AUSENTE')
   );
+};
+
+const isDeliveredWaypointStatus = (status: string) => {
+  const normalized = normalizeWaypointStatus(status);
+  return normalized.includes('ENTREGUE') || normalized.includes('CONCLUID');
 };
 
 function isPendingRouteFinishError(message: string) {
@@ -76,6 +83,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [capturedPhotoName, setCapturedPhotoName] = useState<string | null>(null);
   const [showFailureModal, setShowFailureModal] = useState(false);
   const [showDeliveredConfirmModal, setShowDeliveredConfirmModal] = useState(false);
+  const [loadingDeliveryPhoto, setLoadingDeliveryPhoto] = useState(false);
+  const [deliveryPhotoUri, setDeliveryPhotoUri] = useState<string | null>(null);
   const [failureStatus, setFailureStatus] = useState<FailureStatus>('FALHA TEMPO ADVERSO');
   const [failureObs, setFailureObs] = useState('');
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
@@ -113,11 +122,45 @@ export function DeliveryScreen({ route, navigation }: Props) {
     setShowCameraLoadingHint(false);
     setShowFailureModal(false);
     setShowDeliveredConfirmModal(false);
+    setLoadingDeliveryPhoto(false);
+    setDeliveryPhotoUri(null);
     setFailureStatus('FALHA TEMPO ADVERSO');
     setFailureObs('');
     setFeedbackError(null);
     setFeedbackSuccess(null);
   }, [waypoint.id, waypoint.status]);
+
+  useEffect(() => {
+    if (!isDeliveredWaypointStatus(currentStatus)) {
+      return;
+    }
+
+    let isMounted = true;
+    setLoadingDeliveryPhoto(true);
+    setFeedbackError(null);
+    void (async () => {
+      try {
+        const localUri = await getWaypointDeliveryPhoto(waypoint.id, currentStatus);
+        if (!isMounted) {
+          return;
+        }
+        setDeliveryPhotoUri(localUri);
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+        setFeedbackError(getApiError(error));
+      } finally {
+        if (isMounted) {
+          setLoadingDeliveryPhoto(false);
+        }
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentStatus, waypoint.id]);
 
   useEffect(() => {
     if (!showCameraModal || capturedPhotoUri) {
@@ -312,18 +355,36 @@ export function DeliveryScreen({ route, navigation }: Props) {
       return;
     }
 
-    setCameraBusy(true);
-    setHasUploadedPhoto(true);
-    setUploadedPhotoUri(capturedPhotoUri);
-    setUploadedPhotoName(capturedPhotoName);
-    setShowCameraModal(false);
-    setCapturedPhotoUri(null);
-    setCapturedPhotoName(null);
-    setCameraError(null);
-    setShowCameraLoadingHint(false);
-    setFeedbackSuccess('Foto salva localmente. Será enviada ao confirmar o status.');
-    Alert.alert('Foto confirmada', 'Foto salva com sucesso.');
-    setCameraBusy(false);
+    try {
+      setCameraBusy(true);
+      const baseDirectory = FileSystem.documentDirectory;
+      let persistedUri = capturedPhotoUri;
+      if (baseDirectory) {
+        const photosDirectory = `${baseDirectory}delivery-photos`;
+        await FileSystem.makeDirectoryAsync(photosDirectory, { intermediates: true });
+        const destinationUri = `${photosDirectory}/${capturedPhotoName}`;
+        await FileSystem.copyAsync({
+          from: capturedPhotoUri,
+          to: destinationUri
+        });
+        persistedUri = destinationUri;
+      }
+
+      setHasUploadedPhoto(true);
+      setUploadedPhotoUri(persistedUri);
+      setUploadedPhotoName(capturedPhotoName);
+      setShowCameraModal(false);
+      setCapturedPhotoUri(null);
+      setCapturedPhotoName(null);
+      setCameraError(null);
+      setShowCameraLoadingHint(false);
+      setFeedbackSuccess('Foto salva localmente. Será enviada ao confirmar o status.');
+      Alert.alert('Foto confirmada', 'Foto salva com sucesso.');
+    } catch (error) {
+      Alert.alert('Falha ao confirmar foto', getApiError(error));
+    } finally {
+      setCameraBusy(false);
+    }
   };
 
   const onConfirmDelivered = () => {
@@ -407,6 +468,19 @@ export function DeliveryScreen({ route, navigation }: Props) {
         </Text>
         {feedbackSuccess ? <Text style={styles.feedbackSuccess}>{feedbackSuccess}</Text> : null}
         {feedbackError ? <Text style={styles.feedbackError}>{feedbackError}</Text> : null}
+        {loadingDeliveryPhoto ? (
+          <View style={styles.deliveryPhotoLoading}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={styles.photoStatus}>Carregando foto da entrega...</Text>
+          </View>
+        ) : null}
+        {deliveryPhotoUri ? (
+          <Image
+            source={{ uri: deliveryPhotoUri }}
+            resizeMode="cover"
+            style={styles.deliveryPhotoPreview}
+          />
+        ) : null}
 
         <PrimaryButton
           label="Marcar como ENTREGUE"
@@ -682,6 +756,22 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     color: colors.textSecondary,
     fontSize: 12
+  },
+  deliveryPhotoLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+    marginBottom: 8
+  },
+  deliveryPhotoPreview: {
+    width: '100%',
+    height: 220,
+    borderRadius: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#F2F4F7'
   },
   feedbackSuccess: {
     marginBottom: 8,

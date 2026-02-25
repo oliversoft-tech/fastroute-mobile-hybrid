@@ -929,3 +929,255 @@ export async function updateWaypointOrder(params: {
   assertWebhookSuccess(data, 'Não foi possível reordenar os waypoints.');
   invalidateRouteQueryCache(routeId);
 }
+
+type WaypointPhotoPayload =
+  | {
+      kind: 'base64';
+      base64: string;
+      fileName: string;
+      mimeType: string;
+    }
+  | {
+      kind: 'url';
+      url: string;
+      fileName: string;
+      mimeType?: string;
+    };
+
+function normalizeMaybeBase64(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const dataUriMatch = /^data:([^;]+);base64,(.+)$/i.exec(trimmed);
+  if (dataUriMatch) {
+    return {
+      mimeType: dataUriMatch[1] || 'image/jpeg',
+      base64: dataUriMatch[2]
+    };
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return null;
+  }
+  if (/^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) {
+    return {
+      mimeType: 'image/jpeg',
+      base64: trimmed.replace(/\s+/g, '')
+    };
+  }
+  return null;
+}
+
+function pickPhotoPayload(value: unknown, depth = 0): WaypointPhotoPayload | null {
+  if (depth > 8 || value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = normalizeMaybeBase64(value);
+    if (normalized) {
+      return {
+        kind: 'base64',
+        base64: normalized.base64,
+        fileName: `entrega_${Date.now()}.jpg`,
+        mimeType: normalized.mimeType
+      };
+    }
+    if (/^https?:\/\//i.test(value.trim())) {
+      return {
+        kind: 'url',
+        url: value.trim(),
+        fileName: `entrega_${Date.now()}.jpg`
+      };
+    }
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = pickPhotoPayload(entry, depth + 1);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  if (typeof value !== 'object') {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const possibleFileName = pickString(
+    record.file_name,
+    record.filename,
+    record.name,
+    record.fileName
+  );
+  const possibleMime = pickString(record.mime_type, record.mimeType, record.content_type, record.contentType);
+  const possibleUrl = pickString(record.photo_url, record.photoUrl, record.image_url, record.imageUrl, record.url);
+  const possibleBase64 = pickString(record.image_base64, record.photo_base64, record.base64, record.image);
+  if (possibleBase64) {
+    const normalized = normalizeMaybeBase64(possibleBase64);
+    if (normalized) {
+      return {
+        kind: 'base64',
+        base64: normalized.base64,
+        fileName: possibleFileName ?? `entrega_${Date.now()}.jpg`,
+        mimeType: possibleMime ?? normalized.mimeType
+      };
+    }
+  }
+  if (possibleUrl) {
+    return {
+      kind: 'url',
+      url: possibleUrl,
+      fileName: possibleFileName ?? `entrega_${Date.now()}.jpg`,
+      mimeType: possibleMime ?? undefined
+    };
+  }
+
+  const nestedKeys = ['data', 'body', 'result', 'output', 'photo', 'image', 'payload'];
+  for (const key of nestedKeys) {
+    if (!(key in record)) {
+      continue;
+    }
+    const nested = pickPhotoPayload(record[key], depth + 1);
+    if (nested) {
+      if (possibleFileName && !nested.fileName) {
+        nested.fileName = possibleFileName;
+      }
+      return nested;
+    }
+  }
+
+  for (const entry of Object.values(record)) {
+    const nested = pickPhotoPayload(entry, depth + 1);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+async function blobToBase64(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao converter foto para base64.'));
+    reader.onloadend = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('Falha ao converter foto para base64.'));
+        return;
+      }
+      const parts = reader.result.split(',');
+      resolve(parts.length > 1 ? parts[1] : parts[0]);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function getWaypointPhoto(
+  waypointId: number
+): Promise<WaypointPhotoPayload | null> {
+  const normalizedWaypointId = Math.trunc(Number(waypointId));
+  if (!Number.isFinite(normalizedWaypointId) || normalizedWaypointId <= 0) {
+    throw new Error('waypoint_id inválido para consulta da foto.');
+  }
+
+  const callGetPhoto = async () => {
+    const response = await authorizedFetch(
+      buildApiUrl(`waypoint/photo?waypoint_id=${normalizedWaypointId}`),
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json, image/*'
+        }
+      }
+    );
+
+    const contentType = response.headers.get('content-type') ?? '';
+    const isImageResponse = /^image\//i.test(contentType.trim());
+    if (isImageResponse) {
+      const blob = await response.blob();
+      return { response, contentType, parsedBody: null as unknown, blob };
+    }
+
+    const rawBody = await response.text();
+    const parsedBody = parseApiResponseBody(rawBody);
+    return { response, contentType, parsedBody, blob: null as Blob | null };
+  };
+
+  let { response, contentType, parsedBody, blob } = await callGetPhoto();
+
+  if (response.status === 401 || response.status === 403 || isAuthPayloadFailure(parsedBody)) {
+    await refreshAccessTokenIfPossible();
+    const retryResult = await callGetPhoto();
+    response = retryResult.response;
+    contentType = retryResult.contentType;
+    parsedBody = retryResult.parsedBody;
+    blob = retryResult.blob;
+  }
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(pickApiErrorMessage(parsedBody, `Erro HTTP ${response.status}`));
+  }
+
+  if (blob && /^image\//i.test(contentType.trim())) {
+    const base64 = await blobToBase64(blob);
+    const safeMimeType = contentType.split(';')[0].trim() || 'image/jpeg';
+    return {
+      kind: 'base64',
+      base64,
+      fileName: `entrega_${normalizedWaypointId}.jpg`,
+      mimeType: safeMimeType
+    };
+  }
+
+  assertWebhookSuccess(parsedBody, 'Não foi possível carregar foto da entrega.');
+  return pickPhotoPayload(parsedBody);
+}
+
+export async function deleteRoute(routeId: number) {
+  const normalizedRouteId = Math.trunc(Number(routeId));
+  if (!Number.isFinite(normalizedRouteId) || normalizedRouteId <= 0) {
+    throw new Error('route_id inválido para exclusão.');
+  }
+
+  const callDelete = async () => {
+    const response = await authorizedFetch(buildApiUrl(`route/${normalizedRouteId}`), {
+      method: 'DELETE',
+      headers: {
+        Accept: 'application/json'
+      }
+    });
+    const rawBody = await response.text();
+    const parsedBody = parseApiResponseBody(rawBody);
+    return { response, parsedBody };
+  };
+
+  let { response, parsedBody } = await callDelete();
+
+  if (response.status === 401 || response.status === 403 || isAuthPayloadFailure(parsedBody)) {
+    await refreshAccessTokenIfPossible();
+    const retry = await callDelete();
+    response = retry.response;
+    parsedBody = retry.parsedBody;
+  }
+
+  if (response.status === 404) {
+    invalidateRouteQueryCache(normalizedRouteId);
+    return;
+  }
+
+  if (!response.ok) {
+    throw new Error(pickApiErrorMessage(parsedBody, `Erro HTTP ${response.status}`));
+  }
+
+  assertWebhookSuccess(parsedBody, 'Não foi possível excluir a rota.');
+  invalidateRouteQueryCache(normalizedRouteId);
+}

@@ -471,11 +471,12 @@ export function MapScreen({ route, navigation }: Props) {
   }, [badge]);
 
   const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
-  const reorderLockedByRouteStatus = routeStatus === 'EM_ANDAMENTO' || routeStatus === 'EM_ROTA';
+  const canReorderRoute = routeStatus === 'CRIADA';
+  const reorderLockedByRouteStatus = !canReorderRoute;
 
   const onConfirmOrder = async () => {
     if (reorderLockedByRouteStatus) {
-      Alert.alert('Ação indisponível', 'Não é possível alterar a ordem de uma rota em andamento.');
+      Alert.alert('Ação indisponível', 'A ordem só pode ser alterada quando a rota estiver no status CRIADA.');
       return;
     }
 
@@ -515,7 +516,7 @@ export function MapScreen({ route, navigation }: Props) {
 
   const onRestoreOriginalOrder = async () => {
     if (reorderLockedByRouteStatus) {
-      Alert.alert('Ação indisponível', 'Não é possível restaurar a ordem de uma rota em andamento.');
+      Alert.alert('Ação indisponível', 'A ordem só pode ser alterada quando a rota estiver no status CRIADA.');
       return;
     }
 

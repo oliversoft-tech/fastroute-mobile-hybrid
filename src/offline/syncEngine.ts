@@ -14,10 +14,12 @@ import {
   countPendingSyncOperations,
   getLastDailySyncDate,
   getDailySyncTime,
+  isInitialSyncDone,
   listPendingSyncOperations,
   markSyncOperationDone,
   markSyncOperationFailed,
   saveRouteSnapshot,
+  setInitialSyncDone,
   setLastDailySyncDate,
   setLastSyncAt
 } from './localDb';
@@ -252,6 +254,26 @@ export async function maybeRunScheduledSync() {
   }
 
   return syncNow('scheduled');
+}
+
+export async function maybeRunInitialAutoSync() {
+  if (isSyncRunning()) {
+    return null;
+  }
+
+  if (!getAuthAccessToken()) {
+    return null;
+  }
+
+  if (await isInitialSyncDone()) {
+    return null;
+  }
+
+  const result = await syncNow('manual');
+  if (result.ok) {
+    await setInitialSyncDone(true);
+  }
+  return result;
 }
 
 export function formatSyncSummary(result: SyncResult) {

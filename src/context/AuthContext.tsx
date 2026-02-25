@@ -19,6 +19,7 @@ import { refreshWithSupabase } from '../api/supabaseClient';
 import { resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/authStorage';
 import { invalidateRouteQueryCache } from '../state/routesQueryCache';
+import { maybeRunInitialAutoSync } from '../offline/syncEngine';
 
 interface AuthState {
   userEmail: string | null;
@@ -161,6 +162,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setTokenRefreshHandler(null);
     };
   }, [logout]);
+
+  useEffect(() => {
+    if (!isReady || !authToken) {
+      return;
+    }
+    void maybeRunInitialAutoSync();
+  }, [authToken, isReady]);
 
   const value = useMemo(
     () => ({

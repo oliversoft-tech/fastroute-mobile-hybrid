@@ -22,6 +22,7 @@ const DEFAULT_SYNC_TIME = '19:00';
 const SETTINGS_KEY_DAILY_SYNC_TIME = 'daily_sync_time';
 const SETTINGS_KEY_LAST_SYNC_AT = 'last_sync_at';
 const SETTINGS_KEY_LAST_DAILY_SYNC_DATE = 'last_daily_sync_date';
+const SETTINGS_KEY_INITIAL_SYNC_DONE = 'initial_sync_done';
 
 let dbPromise: Promise<SQLiteDatabase> | null = null;
 let schemaReady = false;
@@ -516,3 +517,10 @@ export async function setLastDailySyncDate(value: string) {
   await setAppSetting(SETTINGS_KEY_LAST_DAILY_SYNC_DATE, value);
 }
 
+export async function isInitialSyncDone() {
+  return (await getAppSetting(SETTINGS_KEY_INITIAL_SYNC_DONE)) === '1';
+}
+
+export async function setInitialSyncDone(done: boolean) {
+  await setAppSetting(SETTINGS_KEY_INITIAL_SYNC_DONE, done ? '1' : '0');
+}

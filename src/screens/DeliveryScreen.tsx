@@ -31,7 +31,22 @@ import { useAuth } from '../context/AuthContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Delivery'>;
 type FailureStatus = 'FALHA TEMPO ADVERSO' | 'FALHA MORADOR AUSENTE';
-const isOpenWaypointStatus = (status: string) => status === 'PENDENTE' || status === 'EM_ROTA';
+const normalizeWaypointStatus = (status: string) =>
+  String(status ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+
+const isFinishedWaypointStatus = (status: string) => {
+  const normalized = normalizeWaypointStatus(status);
+  return (
+    normalized.includes('ENTREGUE') ||
+    normalized.includes('CONCLUID') ||
+    normalized.includes('FALHA TEMPO ADVERSO') ||
+    normalized.includes('FALHA MORADOR AUSENTE')
+  );
+};
 
 function isPendingRouteFinishError(message: string) {
   const normalized = message.toLowerCase();
@@ -68,7 +83,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
-  const canEditWaypoint = currentStatus === 'PENDENTE' || currentStatus === 'REORDENADO';
+  const canEditWaypoint = !isFinishedWaypointStatus(currentStatus);
   const payloadUserId = (() => {
     const authContextUserId = userId?.trim() ?? '';
     if (/^\d+$/.test(authContextUserId)) {
@@ -145,16 +160,15 @@ export function DeliveryScreen({ route, navigation }: Props) {
       setCurrentStatus(updatedStatus);
       setFeedbackSuccess('Status atualizado com sucesso.');
 
-      // Ao concluir todos os waypoints, finaliza a rota automaticamente.
+      // Ao concluir todos os waypoints (entregue/falha), finaliza a rota automaticamente.
       let autoFinishWarning: string | null = null;
       let refreshedWaypoints: Awaited<ReturnType<typeof listRouteWaypoints>> | null = null;
-      let shouldTryAutoFinish = true;
+      let shouldTryAutoFinish = false;
 
       try {
         refreshedWaypoints = await listRouteWaypoints(routeId);
         if (refreshedWaypoints.length > 0) {
-          const hasOpenWaypoints = refreshedWaypoints.some((item) => isOpenWaypointStatus(item.status));
-          shouldTryAutoFinish = !hasOpenWaypoints;
+          shouldTryAutoFinish = refreshedWaypoints.every((item) => isFinishedWaypointStatus(item.status));
         }
 
         if (shouldTryAutoFinish) {
@@ -187,7 +201,10 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
   const onTakePhoto = async () => {
     if (!canEditWaypoint) {
-      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE ou REORDENADO permitem tirar foto.');
+      Alert.alert(
+        'Ação indisponível',
+        'Não é possível alterar waypoint com status ENTREGUE ou FALHA.'
+      );
       return;
     }
 
@@ -292,7 +309,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
     if (!canEditWaypoint) {
       Alert.alert(
         'Ação indisponível',
-        'Somente waypoints com status PENDENTE ou REORDENADO permitem marcar como entregue.'
+        'Não é possível alterar waypoint com status ENTREGUE ou FALHA.'
       );
       return;
     }
@@ -313,7 +330,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
   const onConfirmFailure = async () => {
     if (!canEditWaypoint) {
-      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE ou REORDENADO permitem marcar falha.');
+      Alert.alert('Ação indisponível', 'Não é possível alterar waypoint com status ENTREGUE ou FALHA.');
       return;
     }
 
@@ -386,7 +403,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
             if (!canEditWaypoint) {
               Alert.alert(
                 'Ação indisponível',
-                'Somente waypoints com status PENDENTE ou REORDENADO permitem marcar falha.'
+                'Não é possível alterar waypoint com status ENTREGUE ou FALHA.'
               );
               return;
             }

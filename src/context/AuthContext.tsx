@@ -99,17 +99,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Fallback para o user_id recebido no login quando consulta relacional falhar.
     }
 
-    await saveAuthSession({
-      email,
-      token: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      userId: resolvedUserId
-    });
     setUserEmail(email);
     setUserId(resolvedUserId);
     setAuthTokenState(tokens.accessToken);
     setRefreshTokenState(tokens.refreshToken);
     setAuthSessionTokens(tokens.accessToken, tokens.refreshToken);
+    try {
+      await saveAuthSession({
+        email,
+        token: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        userId: resolvedUserId
+      });
+    } catch (storageError) {
+      console.warn('[Auth] Falha ao persistir sessão após login:', storageError);
+    }
   }, []);
 
   const logout = useCallback(async () => {
@@ -135,12 +139,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setAuthTokenState(nextAccessToken);
       setRefreshTokenState(nextRefreshToken);
-      await saveAuthSession({
-        email: currentEmail,
-        token: nextAccessToken,
-        refreshToken: nextRefreshToken,
-        userId: currentUserId
-      });
+      try {
+        await saveAuthSession({
+          email: currentEmail,
+          token: nextAccessToken,
+          refreshToken: nextRefreshToken,
+          userId: currentUserId
+        });
+      } catch (storageError) {
+        console.warn('[Auth] Falha ao persistir sessão após refresh:', storageError);
+      }
     });
     setTokenRefreshHandler((refreshToken) => refreshWithSupabase(refreshToken));
 

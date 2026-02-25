@@ -4,16 +4,16 @@ App React Native com Expo, inspirado nas telas do prototipo, para operacao de ro
 
 ## Funcionalidades implementadas
 
-- Login via `POST /login`
-- Lista de rotas (`GET /route`)
-- Importacao de pedidos por arquivo (`POST /route/import`)
-- Tela de arquivos locais e historico de importacoes (visual do prototipo)
-- Detalhes de rota (`GET /route?route_id=...`)
-- Iniciar rota (`PATCH /route/start?route_id=...`)
-- Finalizar rota (`PATCH /route/finish?route_id=...`)
-- Finalizar waypoint (`PATCH /waypoint/finish`)
-- Visualizacao da rota no mapa
-- Abrir parada no Google Maps
+- Login via backend (`POST /login`) com refresh de sessão via Supabase SDK.
+- Fluxo offline-first:
+  - Operações salvas localmente (SQLite).
+  - Fila de sync local para envio posterior.
+  - Sync manual pela tela de Configurações.
+  - Sync diário automático em horário configurável (padrão `19:00`).
+- Lista de rotas e waypoints a partir do banco local.
+- Importação de rota em modo offline (enfileira para sync posterior).
+- Início/finalização de rota e atualização de waypoint em modo offline.
+- Visualização da rota no mapa e telas de detalhamento.
 
 ## API
 
@@ -37,7 +37,9 @@ Refresh de token via Supabase SDK:
 2. (Opcional) Copie `.env.example` para `.env` e ajuste a URL.
 3. Android local (sem Metro em runtime):
    - `npm run android`
-4. Opcional para desenvolvimento com Metro:
+4. iOS local (sem Metro em runtime):
+   - `npm run ios`
+5. Opcional para desenvolvimento com Metro:
    - `npm run start`
 
 ## Estrutura principal
@@ -45,10 +47,11 @@ Refresh de token via Supabase SDK:
 - `App.tsx`: bootstrap do app
 - `src/navigation/`: stack navigator
 - `src/screens/`: telas principais
-- `src/api/`: client HTTP e servicos
+- `src/api/`: APIs locais (offline) e APIs remotas (somente Sync Engine)
 - `src/components/`: componentes reutilizaveis
+- `src/offline/`: banco SQLite, fila local, Sync Engine e scheduler
 
 ## Observacoes
 
 - O contrato usado pelo app segue a collection Postman `FastRouteApp.postman_collection.json`.
-- O app normaliza diferentes formatos de payload da API para manter a UI consistente.
+- O app não sincroniza apenas por haver internet; sincroniza somente de forma manual ou no horário diário configurado.

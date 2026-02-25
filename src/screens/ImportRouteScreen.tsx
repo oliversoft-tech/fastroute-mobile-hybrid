@@ -15,8 +15,6 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { importOrders } from '../api/ordersApi';
 import { getApiError } from '../api/httpClient';
 import { ImportResult } from '../api/types';
-import { listRouteWaypoints, listRoutes } from '../api/routesApi';
-import { listRouteWaypointsFromSupabase } from '../api/supabaseDataApi';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -54,76 +52,6 @@ export function ImportRouteScreen({ navigation }: Props) {
     }
   };
 
-  const delay = (ms: number) =>
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, ms);
-    });
-
-  const loadImportedRouteWaypoints = async (routeId: number) => {
-    const normalizedRouteId = Math.trunc(Number(routeId));
-    if (!Number.isFinite(normalizedRouteId) || normalizedRouteId <= 0) {
-      return [] as Awaited<ReturnType<typeof listRouteWaypoints>>;
-    }
-
-    // Após importar, aguarda a persistência relacional no banco para abrir o mapa correto.
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const fromSupabase = await listRouteWaypointsFromSupabase(normalizedRouteId);
-      if (fromSupabase.length > 0) {
-        return fromSupabase;
-      }
-      await delay(450);
-    }
-
-    const fallback = await listRouteWaypoints(normalizedRouteId, { forceRefresh: true });
-    return fallback.filter((waypoint) => {
-      const waypointRouteId = Number(waypoint.route_id);
-      return !Number.isFinite(waypointRouteId) || waypointRouteId === normalizedRouteId;
-    });
-  };
-
-  const resolveCreatedRouteId = async (
-    payload: ImportResult,
-    previousRouteIds: Set<number>
-  ) => {
-    const payloadCandidates = [
-      payload.route_id,
-      ...(payload.route_ids ?? [])
-    ]
-      .map((entry) => Number(entry))
-      .filter((entry) => Number.isFinite(entry) && entry > 0)
-      .map((entry) => Math.trunc(entry));
-    const uniquePayloadCandidates = [...new Set(payloadCandidates)];
-    const newRouteFromPayload = uniquePayloadCandidates.find((entry) => !previousRouteIds.has(entry));
-    if (newRouteFromPayload) {
-      return newRouteFromPayload;
-    }
-    if (uniquePayloadCandidates.length === 1) {
-      return uniquePayloadCandidates[0];
-    }
-
-    const routesAfterImport = await listRoutes({ forceRefresh: true });
-    if (routesAfterImport.length === 0) {
-      return null;
-    }
-
-    const candidates = routesAfterImport.filter((entry) => !previousRouteIds.has(entry.id));
-    if (candidates.length === 0) {
-      return null;
-    }
-
-    const sortedRoutes = [...candidates].sort((a, b) => {
-      const dateA = Date.parse(a.created_at);
-      const dateB = Date.parse(b.created_at);
-      if (Number.isFinite(dateA) && Number.isFinite(dateB) && dateA !== dateB) {
-        return dateB - dateA;
-      }
-
-      return b.id - a.id;
-    });
-
-    return sortedRoutes[0].id;
-  };
-
   const onImport = async () => {
     if (!selectedFile) {
       Alert.alert('Arquivo obrigatório', 'Selecione um arquivo XLSX ou CSV para continuar.');
@@ -132,8 +60,6 @@ export function ImportRouteScreen({ navigation }: Props) {
 
     try {
       setLoading(true);
-      const routesBeforeImport = await listRoutes({ forceRefresh: true });
-      const previousRouteIds = new Set(routesBeforeImport.map((entry) => entry.id));
       const payload = await importOrders({
         uri: selectedFile.uri,
         name: selectedFile.name,
@@ -144,32 +70,11 @@ export function ImportRouteScreen({ navigation }: Props) {
       const importedEntry = toRecentFileEntry(selectedFile);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
-      const routeId = await resolveCreatedRouteId(payload, previousRouteIds);
-      if (!routeId) {
-        Alert.alert(
-          'Importação concluída',
-          'Pedidos importados com sucesso, mas o backend não retornou o ID da nova rota.'
-        );
-        navigation.goBack();
-        return;
-      }
-
-      const waypoints = await loadImportedRouteWaypoints(routeId);
-
-      if (waypoints.length === 0) {
-        Alert.alert('Importação concluída', 'Rota criada, mas sem waypoints para reordenação.');
-        navigation.replace('RouteDetail', { routeId });
-        return;
-      }
-
       Alert.alert(
-        'Importação concluída',
-        'Rota Importada com Sucesso. Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.'
+        'Importação enfileirada',
+        'Arquivo salvo no modo offline. O envio para o backend será feito apenas no Sync Manual ou no Sync diário configurado.'
       );
-      navigation.replace('Map', {
-        routeId,
-        waypoints
-      });
+      navigation.goBack();
     } catch (error) {
       Alert.alert('Erro na importação', getApiError(error));
     } finally {

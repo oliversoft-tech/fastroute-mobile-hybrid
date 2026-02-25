@@ -8,6 +8,7 @@ import { FileBrowserScreen } from '../screens/FileBrowserScreen';
 import { RouteDetailScreen } from '../screens/RouteDetailScreen';
 import { DeliveryScreen } from '../screens/DeliveryScreen';
 import { MapScreen } from '../screens/MapScreen';
+import { SettingsScreen } from '../screens/SettingsScreen';
 import { colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 
@@ -38,6 +39,11 @@ export function AppNavigator() {
       ) : (
         <>
           <Stack.Screen name="Routes" component={RoutesScreen} options={{ title: 'Minhas Rotas' }} />
+          <Stack.Screen
+            name="Settings"
+            component={SettingsScreen}
+            options={{ title: 'Configurações' }}
+          />
           <Stack.Screen
             name="ImportRoute"
             component={ImportRouteScreen}

@@ -69,6 +69,9 @@ export function RoutesScreen({ navigation }: Props) {
           <Text style={styles.headerSubtitle}>Import {routeStats.total} • {routeStats.pending} pendentes</Text>
         </View>
         <View style={styles.headerActions}>
+          <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
+            <Text style={styles.settings}>Config</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => void logout()}>
             <Text style={styles.logout}>Sair</Text>
           </TouchableOpacity>
@@ -160,7 +163,12 @@ const styles = StyleSheet.create({
     fontWeight: '700'
   },
   headerActions: {
-    alignItems: 'flex-end'
+    alignItems: 'flex-end',
+    gap: 10
+  },
+  settings: {
+    color: colors.primary,
+    fontWeight: '700'
   },
   driver: {
     color: colors.textSecondary,

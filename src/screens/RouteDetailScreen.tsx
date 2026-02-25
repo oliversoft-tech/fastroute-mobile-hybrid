@@ -114,7 +114,8 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const waypoints = routeDetail?.waypoints ?? [];
   const normalizedRouteStatus = normalizeRouteStatus(routeDetail?.status);
   const isRouteConcludedOrCanceled = normalizedRouteStatus.includes('FINALIZ') || normalizedRouteStatus.includes('CONCLUID') || normalizedRouteStatus.includes('CANCEL');
-  const canOpenWaypointDetail = !isRouteConcludedOrCanceled;
+  const isRouteCreated = normalizedRouteStatus.includes('CRIADA') || normalizedRouteStatus.includes('CRIADO');
+  const canOpenWaypointDetail = !isRouteConcludedOrCanceled && !isRouteCreated;
   const isStartDisabled =
     saving ||
     startLocked ||

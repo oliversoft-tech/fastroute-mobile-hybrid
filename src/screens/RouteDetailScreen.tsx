@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -35,6 +35,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [startLocked, setStartLocked] = useState(false);
   const startRouteInFlightRef = useRef(false);
 
   const loadRouteDetails = useCallback(async () => {
@@ -88,9 +89,24 @@ export function RouteDetailScreen({ route, navigation }: Props) {
     }, [loadRouteDetails])
   );
 
+  useEffect(() => {
+    setStartLocked(false);
+  }, [routeId]);
+
   const waypoints = routeDetail?.waypoints ?? [];
-  const canOpenWaypointDetail = routeDetail?.status === 'EM_ANDAMENTO';
-  const isStartDisabled = saving || routeDetail?.status === 'FINALIZADA';
+  const normalizedRouteStatus = String(routeDetail?.status ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  const isRouteConcludedOrCanceled = normalizedRouteStatus.includes('FINALIZ') || normalizedRouteStatus.includes('CONCLUID') || normalizedRouteStatus.includes('CANCEL');
+  const canOpenWaypointDetail = !isRouteConcludedOrCanceled;
+  const isStartDisabled =
+    saving ||
+    startLocked ||
+    normalizedRouteStatus === 'EM_ROTA' ||
+    normalizedRouteStatus === 'EM_ANDAMENTO' ||
+    isRouteConcludedOrCanceled;
 
   const onStartRoute = async () => {
     if (startRouteInFlightRef.current || isStartDisabled) {
@@ -101,6 +117,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
     try {
       setSaving(true);
       await startRoute(routeId);
+      setStartLocked(true);
       await loadRouteDetails();
       if (waypoints.length === 0) {
         Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);

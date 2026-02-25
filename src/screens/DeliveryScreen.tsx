@@ -68,7 +68,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
-  const isPendingWaypoint = currentStatus === 'PENDENTE';
+  const canEditWaypoint = currentStatus === 'PENDENTE' || currentStatus === 'REORDENADO';
   const payloadUserId = (() => {
     const authContextUserId = userId?.trim() ?? '';
     if (/^\d+$/.test(authContextUserId)) {
@@ -186,8 +186,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onTakePhoto = async () => {
-    if (!isPendingWaypoint) {
-      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE permitem tirar foto.');
+    if (!canEditWaypoint) {
+      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE ou REORDENADO permitem tirar foto.');
       return;
     }
 
@@ -289,10 +289,10 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onConfirmDelivered = () => {
-    if (!isPendingWaypoint) {
+    if (!canEditWaypoint) {
       Alert.alert(
         'Ação indisponível',
-        'Somente waypoints com status PENDENTE permitem marcar como entregue.'
+        'Somente waypoints com status PENDENTE ou REORDENADO permitem marcar como entregue.'
       );
       return;
     }
@@ -312,8 +312,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onConfirmFailure = async () => {
-    if (!isPendingWaypoint) {
-      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE permitem marcar falha.');
+    if (!canEditWaypoint) {
+      Alert.alert('Ação indisponível', 'Somente waypoints com status PENDENTE ou REORDENADO permitem marcar falha.');
       return;
     }
 
@@ -359,7 +359,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="primary"
           onPress={onTakePhoto}
           loading={cameraBusy}
-          disabled={loading || !isPendingWaypoint}
+          disabled={loading || !canEditWaypoint}
           style={styles.button}
         />
         <Text style={styles.photoStatus}>
@@ -375,7 +375,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="success"
           onPress={onConfirmDelivered}
           loading={loading}
-          disabled={cameraBusy || !isPendingWaypoint}
+          disabled={cameraBusy || !canEditWaypoint}
           style={styles.button}
         />
 
@@ -383,17 +383,17 @@ export function DeliveryScreen({ route, navigation }: Props) {
           label="Marcar FALHA"
           variant="danger"
           onPress={() => {
-            if (!isPendingWaypoint) {
+            if (!canEditWaypoint) {
               Alert.alert(
                 'Ação indisponível',
-                'Somente waypoints com status PENDENTE permitem marcar falha.'
+                'Somente waypoints com status PENDENTE ou REORDENADO permitem marcar falha.'
               );
               return;
             }
             setShowFailureModal(true);
           }}
           loading={loading}
-          disabled={cameraBusy || !isPendingWaypoint}
+          disabled={cameraBusy || !canEditWaypoint}
           style={styles.button}
         />
       </View>

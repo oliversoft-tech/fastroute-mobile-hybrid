@@ -43,7 +43,20 @@ export interface SyncResult {
   error?: string;
 }
 
+type SyncFinishedListener = (result: SyncResult) => void;
+
 let syncInFlight: Promise<SyncResult> | null = null;
+const syncFinishedListeners = new Set<SyncFinishedListener>();
+
+function notifySyncFinished(result: SyncResult) {
+  syncFinishedListeners.forEach((listener) => {
+    try {
+      listener(result);
+    } catch {
+      // Ignora erros de listener para não quebrar o fluxo de sync.
+    }
+  });
+}
 
 function toLocalDate(now: Date) {
   const yyyy = now.getFullYear();
@@ -218,9 +231,14 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
 
 export async function syncNow(trigger: SyncTrigger = 'manual'): Promise<SyncResult> {
   if (!syncInFlight) {
-    syncInFlight = runSync(trigger).finally(() => {
-      syncInFlight = null;
-    });
+    syncInFlight = runSync(trigger)
+      .then((result) => {
+        notifySyncFinished(result);
+        return result;
+      })
+      .finally(() => {
+        syncInFlight = null;
+      });
   }
   return syncInFlight;
 }
@@ -282,4 +300,11 @@ export function formatSyncSummary(result: SyncResult) {
   }
 
   return `Sync concluído. Rotas recebidas: ${result.pulledRoutes}. Operações enviadas: ${result.processedOperations}. Pendentes: ${result.pendingOperations}.`;
+}
+
+export function subscribeSyncFinished(listener: SyncFinishedListener) {
+  syncFinishedListeners.add(listener);
+  return () => {
+    syncFinishedListeners.delete(listener);
+  };
 }

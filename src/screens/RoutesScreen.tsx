@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,6 +20,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { formatDate } from '../utils/date';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { useAuth } from '../context/AuthContext';
+import { subscribeSyncFinished } from '../offline/syncEngine';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Routes'>;
 
@@ -46,6 +47,15 @@ export function RoutesScreen({ navigation }: Props) {
       loadRoutes();
     }, [loadRoutes])
   );
+
+  useEffect(() => {
+    const unsubscribe = subscribeSyncFinished((result) => {
+      if (result.ok) {
+        void loadRoutes();
+      }
+    });
+    return unsubscribe;
+  }, [loadRoutes]);
 
   const onRefresh = () => {
     setRefreshing(true);

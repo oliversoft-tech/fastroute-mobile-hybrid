@@ -74,7 +74,7 @@ export function ImportRouteScreen({ navigation }: Props) {
       await delay(450);
     }
 
-    const fallback = await listRouteWaypoints(normalizedRouteId);
+    const fallback = await listRouteWaypoints(normalizedRouteId, { forceRefresh: true });
     return fallback.filter((waypoint) => {
       const waypointRouteId = Number(waypoint.route_id);
       return !Number.isFinite(waypointRouteId) || waypointRouteId === normalizedRouteId;
@@ -101,7 +101,7 @@ export function ImportRouteScreen({ navigation }: Props) {
       return uniquePayloadCandidates[0];
     }
 
-    const routesAfterImport = await listRoutes();
+    const routesAfterImport = await listRoutes({ forceRefresh: true });
     if (routesAfterImport.length === 0) {
       return null;
     }
@@ -132,7 +132,7 @@ export function ImportRouteScreen({ navigation }: Props) {
 
     try {
       setLoading(true);
-      const routesBeforeImport = await listRoutes();
+      const routesBeforeImport = await listRoutes({ forceRefresh: true });
       const previousRouteIds = new Set(routesBeforeImport.map((entry) => entry.id));
       const payload = await importOrders({
         uri: selectedFile.uri,

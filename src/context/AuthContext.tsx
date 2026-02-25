@@ -18,6 +18,7 @@ import {
 import { refreshWithSupabase } from '../api/supabaseClient';
 import { resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/authStorage';
+import { invalidateRouteQueryCache } from '../state/routesQueryCache';
 
 interface AuthState {
   userEmail: string | null;
@@ -89,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const tokens = await loginRequest(email, password);
+    invalidateRouteQueryCache();
     let resolvedUserId = tokens.userId;
     try {
       const userIdFromUsersTable = await resolveDriverUserIdFromAuthId(tokens.userId);
@@ -123,6 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthTokenState(null);
     setRefreshTokenState(null);
     setAuthSessionTokens(null, null);
+    invalidateRouteQueryCache();
   }, []);
 
   useEffect(() => {

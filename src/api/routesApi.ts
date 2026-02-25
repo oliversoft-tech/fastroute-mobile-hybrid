@@ -9,9 +9,24 @@ import {
   updateRouteWaypointStatusInSupabase
 } from './supabaseDataApi';
 import { API_BASE_URL } from '../config/api';
+import {
+  getCachedRouteDetail,
+  getCachedRouteWaypoints,
+  getCachedRoutesList,
+  invalidateRouteQueryCache,
+  setCachedRouteDetail,
+  setCachedRouteWaypoints,
+  setCachedRoutesList,
+  withInFlightRequest
+} from '../state/routesQueryCache';
 
 interface ApiObject {
   [key: string]: unknown;
+}
+
+interface QueryCacheOptions {
+  forceRefresh?: boolean;
+  ttlMs?: number;
 }
 
 function normalizeStatusValue(value: unknown) {
@@ -511,13 +526,79 @@ async function fetchRoutes(routeId?: number) {
   return [];
 }
 
-export async function listRoutes() {
-  const webhookRoutes = await fetchRoutes();
+export async function listRoutes(options?: QueryCacheOptions) {
+  const forceRefresh = Boolean(options?.forceRefresh);
+  if (!forceRefresh) {
+    const cached = getCachedRoutesList();
+    if (cached) {
+      return cached;
+    }
+  }
 
-  try {
-    const metadataRows = await listRoutesMetadataFromSupabase();
-    if (metadataRows.length === 0) {
-      return sortRoutesByCreatedAtAndId(
+  const requestKey = forceRefresh ? 'routes:list:force' : 'routes:list';
+  return withInFlightRequest(requestKey, async () => {
+    if (!forceRefresh) {
+      const cached = getCachedRoutesList();
+      if (cached) {
+        return cached;
+      }
+    }
+
+    const webhookRoutes = await fetchRoutes();
+    let resolvedRoutes: RouteDetail[];
+
+    try {
+      const metadataRows = await listRoutesMetadataFromSupabase();
+      if (metadataRows.length === 0) {
+        resolvedRoutes = sortRoutesByCreatedAtAndId(
+          webhookRoutes.map((route) => ({
+            ...route,
+            waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
+          }))
+        );
+      } else {
+        const routeIds = metadataRows.map((row) => Number(row.id));
+        const waypointCounts = await listRouteWaypointCountsFromSupabase(routeIds);
+        const byId = new Map<number, RouteDetail>(
+          webhookRoutes.map((route) => [
+            route.id,
+            {
+              ...route,
+              waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
+            }
+          ])
+        );
+
+        for (const metadata of metadataRows) {
+          const routeId = Number(metadata.id);
+          if (!Number.isFinite(routeId) || routeId <= 0) {
+            continue;
+          }
+
+          const existing = byId.get(routeId);
+          const mergedStatus = metadata.status
+            ? mapRouteStatus(metadata.status)
+            : (existing?.status ?? ('PENDENTE' as const));
+          const mergedCreatedAt = metadata.created_at ?? existing?.created_at ?? new Date().toISOString();
+          const mergedClusterId = Number.isFinite(Number(metadata.cluster_id))
+            ? Number(metadata.cluster_id)
+            : (existing?.cluster_id ?? 0);
+          const mergedCount = waypointCounts.get(routeId) ?? existing?.waypoints_count ?? existing?.waypoints?.length ?? 0;
+
+          byId.set(routeId, {
+            id: routeId,
+            cluster_id: mergedClusterId,
+            status: mergedStatus,
+            created_at: mergedCreatedAt,
+            waypoints_count: mergedCount,
+            waypoints: existing?.waypoints
+          });
+        }
+
+        resolvedRoutes = sortRoutesByCreatedAtAndId([...byId.values()]);
+      }
+    } catch {
+      resolvedRoutes = sortRoutesByCreatedAtAndId(
         webhookRoutes.map((route) => ({
           ...route,
           waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
@@ -525,143 +606,143 @@ export async function listRoutes() {
       );
     }
 
-    const routeIds = metadataRows.map((row) => Number(row.id));
-    const waypointCounts = await listRouteWaypointCountsFromSupabase(routeIds);
-    const byId = new Map<number, RouteDetail>(
-      webhookRoutes.map((route) => [
-        route.id,
-        {
-          ...route,
-          waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
-        }
-      ])
-    );
-
-    for (const metadata of metadataRows) {
-      const routeId = Number(metadata.id);
-      if (!Number.isFinite(routeId) || routeId <= 0) {
-        continue;
-      }
-
-      const existing = byId.get(routeId);
-      const mergedStatus = metadata.status
-        ? mapRouteStatus(metadata.status)
-        : (existing?.status ?? ('PENDENTE' as const));
-      const mergedCreatedAt = metadata.created_at ?? existing?.created_at ?? new Date().toISOString();
-      const mergedClusterId = Number.isFinite(Number(metadata.cluster_id))
-        ? Number(metadata.cluster_id)
-        : (existing?.cluster_id ?? 0);
-      const mergedCount = waypointCounts.get(routeId) ?? existing?.waypoints_count ?? existing?.waypoints?.length ?? 0;
-
-      byId.set(routeId, {
-        id: routeId,
-        cluster_id: mergedClusterId,
-        status: mergedStatus,
-        created_at: mergedCreatedAt,
-        waypoints_count: mergedCount,
-        waypoints: existing?.waypoints
-      });
-    }
-
-    return sortRoutesByCreatedAtAndId([...byId.values()]);
-  } catch {
-    return sortRoutesByCreatedAtAndId(
-      webhookRoutes.map((route) => ({
-        ...route,
-        waypoints_count: route.waypoints_count ?? route.waypoints?.length ?? 0
-      }))
-    );
-  }
-}
-
-export async function getRouteDetails(routeId: number) {
-  const [route] = await fetchRoutes(routeId);
-  let routeMetadata: Awaited<ReturnType<typeof getRouteMetadataFromSupabase>> | null = null;
-  try {
-    routeMetadata = await getRouteMetadataFromSupabase(routeId);
-  } catch {
-    // Mantém fallback via payload do webhook quando metadata da rota não estiver disponível.
-  }
-
-  try {
-    const waypointsFromSupabase = await listRouteWaypointsFromSupabase(routeId);
-    const statusFromMetadata = routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : undefined;
-    const createdAtFromMetadata = routeMetadata?.created_at ?? undefined;
-    const clusterIdFromMetadata = routeMetadata?.cluster_id ?? undefined;
-    if (route) {
-      return {
-        ...route,
-        status: statusFromMetadata ?? route.status,
-        created_at: createdAtFromMetadata ?? route.created_at,
-        cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : route.cluster_id,
-        waypoints_count: waypointsFromSupabase.length,
-        waypoints: waypointsFromSupabase
-      };
-    }
-
-    return {
-      id: routeId,
-      cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
-      status: statusFromMetadata ?? ('PENDENTE' as const),
-      created_at: createdAtFromMetadata ?? new Date().toISOString(),
-      waypoints_count: waypointsFromSupabase.length,
-      waypoints: waypointsFromSupabase
-    };
-  } catch {
-    // Mantem fallback via webhook quando consulta relacional no Supabase falhar.
-  }
-
-  if (!route) {
-    const statusFromMetadata = routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : undefined;
-    const createdAtFromMetadata = routeMetadata?.created_at ?? undefined;
-    const clusterIdFromMetadata = routeMetadata?.cluster_id ?? undefined;
-    return {
-      id: routeId,
-      cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
-      status: statusFromMetadata ?? ('PENDENTE' as const),
-      created_at: createdAtFromMetadata ?? new Date().toISOString(),
-      waypoints_count: 0,
-      waypoints: []
-    };
-  }
-
-  let enrichedWaypoints = route.waypoints ?? [];
-  try {
-    enrichedWaypoints = await enrichWaypointsWithAddressData(route.waypoints ?? []);
-  } catch {
-    // Se consulta relacional de endereço falhar, mantém os waypoints vindos do webhook.
-  }
-
-  return {
-    ...route,
-    status: routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : route.status,
-    created_at: routeMetadata?.created_at ?? route.created_at,
-    cluster_id: Number.isFinite(Number(routeMetadata?.cluster_id)) ? Number(routeMetadata?.cluster_id) : route.cluster_id,
-    waypoints_count: enrichedWaypoints.length,
-    waypoints: enrichedWaypoints
-  };
-}
-
-export async function listRouteWaypoints(routeId: number) {
-  try {
-    const fromSupabase = await listRouteWaypointsFromSupabase(routeId);
-    if (fromSupabase.length > 0) {
-      return fromSupabase;
-    }
-  } catch {
-    // fallback para payload do webhook
-  }
-
-  const route = await getRouteDetails(routeId);
-  const fallbackWaypoints = (route.waypoints ?? []).filter((waypoint) => {
-    const normalizedRouteId = Number(waypoint.route_id);
-    return !Number.isFinite(normalizedRouteId) || normalizedRouteId === routeId;
+    setCachedRoutesList(resolvedRoutes, options?.ttlMs);
+    return resolvedRoutes;
   });
-  try {
-    return await enrichWaypointsWithAddressData(fallbackWaypoints);
-  } catch {
-    return fallbackWaypoints;
+}
+
+export async function getRouteDetails(routeId: number, options?: QueryCacheOptions) {
+  const forceRefresh = Boolean(options?.forceRefresh);
+  if (!forceRefresh) {
+    const cached = getCachedRouteDetail(routeId);
+    if (cached) {
+      return cached;
+    }
   }
+
+  const requestKey = forceRefresh ? `routes:detail:${routeId}:force` : `routes:detail:${routeId}`;
+  return withInFlightRequest(requestKey, async () => {
+    if (!forceRefresh) {
+      const cached = getCachedRouteDetail(routeId);
+      if (cached) {
+        return cached;
+      }
+    }
+
+    const [route] = await fetchRoutes(routeId);
+    let routeMetadata: Awaited<ReturnType<typeof getRouteMetadataFromSupabase>> | null = null;
+    try {
+      routeMetadata = await getRouteMetadataFromSupabase(routeId);
+    } catch {
+      // Mantém fallback via payload do webhook quando metadata da rota não estiver disponível.
+    }
+
+    let resolvedDetail: RouteDetail;
+    try {
+      const waypointsFromSupabase = await listRouteWaypointsFromSupabase(routeId);
+      const statusFromMetadata = routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : undefined;
+      const createdAtFromMetadata = routeMetadata?.created_at ?? undefined;
+      const clusterIdFromMetadata = routeMetadata?.cluster_id ?? undefined;
+      if (route) {
+        resolvedDetail = {
+          ...route,
+          status: statusFromMetadata ?? route.status,
+          created_at: createdAtFromMetadata ?? route.created_at,
+          cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : route.cluster_id,
+          waypoints_count: waypointsFromSupabase.length,
+          waypoints: waypointsFromSupabase
+        };
+      } else {
+        resolvedDetail = {
+          id: routeId,
+          cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
+          status: statusFromMetadata ?? ('PENDENTE' as const),
+          created_at: createdAtFromMetadata ?? new Date().toISOString(),
+          waypoints_count: waypointsFromSupabase.length,
+          waypoints: waypointsFromSupabase
+        };
+      }
+    } catch {
+      // Mantem fallback via webhook quando consulta relacional no Supabase falhar.
+      if (!route) {
+        const statusFromMetadata = routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : undefined;
+        const createdAtFromMetadata = routeMetadata?.created_at ?? undefined;
+        const clusterIdFromMetadata = routeMetadata?.cluster_id ?? undefined;
+        resolvedDetail = {
+          id: routeId,
+          cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
+          status: statusFromMetadata ?? ('PENDENTE' as const),
+          created_at: createdAtFromMetadata ?? new Date().toISOString(),
+          waypoints_count: 0,
+          waypoints: []
+        };
+      } else {
+        let enrichedWaypoints = route.waypoints ?? [];
+        try {
+          enrichedWaypoints = await enrichWaypointsWithAddressData(route.waypoints ?? []);
+        } catch {
+          // Se consulta relacional de endereço falhar, mantém os waypoints vindos do webhook.
+        }
+
+        resolvedDetail = {
+          ...route,
+          status: routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : route.status,
+          created_at: routeMetadata?.created_at ?? route.created_at,
+          cluster_id: Number.isFinite(Number(routeMetadata?.cluster_id)) ? Number(routeMetadata?.cluster_id) : route.cluster_id,
+          waypoints_count: enrichedWaypoints.length,
+          waypoints: enrichedWaypoints
+        };
+      }
+    }
+
+    setCachedRouteDetail(routeId, resolvedDetail, options?.ttlMs);
+    return resolvedDetail;
+  });
+}
+
+export async function listRouteWaypoints(routeId: number, options?: QueryCacheOptions) {
+  const forceRefresh = Boolean(options?.forceRefresh);
+  if (!forceRefresh) {
+    const cached = getCachedRouteWaypoints(routeId);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const requestKey = forceRefresh ? `routes:waypoints:${routeId}:force` : `routes:waypoints:${routeId}`;
+  return withInFlightRequest(requestKey, async () => {
+    if (!forceRefresh) {
+      const cached = getCachedRouteWaypoints(routeId);
+      if (cached) {
+        return cached;
+      }
+    }
+
+    try {
+      const fromSupabase = await listRouteWaypointsFromSupabase(routeId);
+      if (fromSupabase.length > 0) {
+        setCachedRouteWaypoints(routeId, fromSupabase, options?.ttlMs);
+        return fromSupabase;
+      }
+    } catch {
+      // fallback para payload do webhook
+    }
+
+    const route = await getRouteDetails(routeId, options);
+    const fallbackWaypoints = (route.waypoints ?? []).filter((waypoint) => {
+      const normalizedRouteId = Number(waypoint.route_id);
+      return !Number.isFinite(normalizedRouteId) || normalizedRouteId === routeId;
+    });
+    let resolved = fallbackWaypoints;
+    try {
+      resolved = await enrichWaypointsWithAddressData(fallbackWaypoints);
+    } catch {
+      // Mantém fallback simples quando enriquecimento falha.
+    }
+
+    setCachedRouteWaypoints(routeId, resolved, options?.ttlMs);
+    return resolved;
+  });
 }
 
 export async function startRoute(routeId: number) {
@@ -670,6 +751,7 @@ export async function startRoute(routeId: number) {
     route_id: routeId
   });
   assertWebhookSuccess(data, 'Não foi possível iniciar a rota.');
+  invalidateRouteQueryCache(routeId);
 }
 
 export async function finishRoute(routeId: number) {
@@ -684,6 +766,7 @@ export async function finishRoute(routeId: number) {
     data = retry.data;
   }
   assertWebhookSuccess(data, 'Não foi possível finalizar a rota.');
+  invalidateRouteQueryCache(routeId);
 }
 
 export type WaypointFinishStatus =
@@ -793,6 +876,7 @@ export async function updateWaypointStatus(
     throw new Error(pickApiErrorMessage(parsedBody, `Erro HTTP ${response.status}`));
   }
   assertWebhookSuccess(parsedBody, 'Não foi possível atualizar o status do waypoint.');
+  invalidateRouteQueryCache(routeId);
 
   const supabaseStatus = mapWaypointStatusToSupabase(mappedStatus);
   if (!supabaseStatus) {
@@ -843,4 +927,5 @@ export async function updateWaypointOrder(params: {
   }
 
   assertWebhookSuccess(data, 'Não foi possível reordenar os waypoints.');
+  invalidateRouteQueryCache(routeId);
 }

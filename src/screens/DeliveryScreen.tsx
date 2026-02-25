@@ -187,7 +187,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
       let shouldTryAutoFinish = false;
 
       try {
-        refreshedWaypoints = await listRouteWaypoints(routeId);
+        refreshedWaypoints = await listRouteWaypoints(routeId, { forceRefresh: true });
         if (refreshedWaypoints.length > 0) {
           shouldTryAutoFinish = refreshedWaypoints.every((item) => isFinishedWaypointStatus(item.status));
         }

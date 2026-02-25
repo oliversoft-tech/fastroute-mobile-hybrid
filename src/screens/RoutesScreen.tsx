@@ -29,9 +29,9 @@ export function RoutesScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadRoutes = useCallback(async () => {
+  const loadRoutes = useCallback(async (options?: { forceRefresh?: boolean }) => {
     try {
-      const data = await listRoutes();
+      const data = await listRoutes({ forceRefresh: options?.forceRefresh });
       setRoutes(data);
     } catch (error) {
       Alert.alert('Erro ao carregar rotas', getApiError(error));
@@ -49,7 +49,7 @@ export function RoutesScreen({ navigation }: Props) {
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadRoutes();
+    loadRoutes({ forceRefresh: true });
   };
 
   const routeStats = useMemo(() => {

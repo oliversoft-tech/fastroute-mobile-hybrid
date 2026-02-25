@@ -1,6 +1,7 @@
 import { ImportResult } from './types';
 import { authorizedFetch } from './httpClient';
 import { API_BASE_URL } from '../config/api';
+import { invalidateRouteQueryCache } from '../state/routesQueryCache';
 
 interface LocalFile {
   uri: string;
@@ -166,18 +167,22 @@ export async function importOrders(file: LocalFile) {
     const parsedRouteIds = collectRouteIds(payload);
     const parsedRouteId = Number(payload.route_id ?? payload.routeId);
 
-    return {
+    const result = {
       orders_created: payload.orders_created ?? 0,
       addresses_created: payload.addresses_created ?? 0,
       routes_generated: payload.routes_generated ?? 0,
       route_ids: parsedRouteIds.length > 0 ? parsedRouteIds : undefined,
       route_id: Number.isFinite(parsedRouteId) ? parsedRouteId : undefined
     };
+    invalidateRouteQueryCache();
+    return result;
   }
 
-  return {
+  const fallbackResult = {
     orders_created: 0,
     addresses_created: 0,
     routes_generated: 0
   };
+  invalidateRouteQueryCache();
+  return fallbackResult;
 }

@@ -522,7 +522,7 @@ export function MapScreen({ route, navigation }: Props) {
 
     try {
       setRestoreLoading(true);
-      const waypointsFromDb = await listRouteWaypoints(route.params.routeId);
+      const waypointsFromDb = await listRouteWaypoints(route.params.routeId, { forceRefresh: true });
       const sortedWaypoints = [...waypointsFromDb].sort((a, b) => a.seq_order - b.seq_order);
       setMapWaypoints(sortedWaypoints);
       setMapRenderKey((prev) => prev + 1);

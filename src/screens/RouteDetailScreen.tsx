@@ -56,43 +56,29 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const [startLocked, setStartLocked] = useState(() => startedRouteIdsLock.has(routeId));
   const startRouteInFlightRef = useRef(false);
 
-  const loadRouteDetails = useCallback(async () => {
+  const loadRouteDetails = useCallback(async (options?: { forceRefresh?: boolean }) => {
     try {
       const cachedOrder = getCachedRouteWaypointOrder(routeId);
-      const data = await getRouteDetails(routeId);
-      try {
-        // Prioriza a origem relacional para refletir status real dos waypoints após reordenação.
-        const authoritativeWaypoints = await listRouteWaypoints(routeId);
-        if (authoritativeWaypoints.length > 0) {
-          const waypoints = applyWaypointOrder(authoritativeWaypoints, cachedOrder);
-          setRouteDetail({
-            ...data,
-            waypoints_count: waypoints.length,
-            waypoints
-          });
-          return;
-        }
-      } catch {
-        // fallback para payload da rota
+      const [detailResult, waypointsResult] = await Promise.allSettled([
+        getRouteDetails(routeId, { forceRefresh: options?.forceRefresh }),
+        listRouteWaypoints(routeId, { forceRefresh: options?.forceRefresh })
+      ]);
+
+      if (detailResult.status !== 'fulfilled') {
+        throw detailResult.reason;
       }
 
-      const fallbackWaypoints = applyWaypointOrder(data.waypoints ?? [], cachedOrder);
+      const detailData = detailResult.value;
+      const baseWaypoints =
+        waypointsResult.status === 'fulfilled' && waypointsResult.value.length > 0
+          ? waypointsResult.value
+          : (detailData.waypoints ?? []);
+      const orderedWaypoints = applyWaypointOrder(baseWaypoints, cachedOrder);
       setRouteDetail({
-        ...data,
-        waypoints_count: fallbackWaypoints.length,
-        waypoints: fallbackWaypoints
+        ...detailData,
+        waypoints_count: orderedWaypoints.length,
+        waypoints: orderedWaypoints
       });
-
-      try {
-        const waypoints = applyWaypointOrder(await listRouteWaypoints(routeId), cachedOrder);
-        setRouteDetail({
-          ...data,
-          waypoints_count: waypoints.length,
-          waypoints
-        });
-      } catch {
-        // Ignora: já existe fallback renderizado.
-      }
     } catch (error) {
       Alert.alert('Erro ao carregar rota', getApiError(error));
     } finally {
@@ -169,7 +155,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => {
         setRefreshing(true);
-        loadRouteDetails();
+        loadRouteDetails({ forceRefresh: true });
       }} />}
     >
       {loading ? (

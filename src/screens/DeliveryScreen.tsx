@@ -98,6 +98,18 @@ export function DeliveryScreen({ route, navigation }: Props) {
     return () => clearTimeout(timeout);
   }, [showCameraModal, capturedPhotoUri, cameraReady, cameraError]);
 
+  useEffect(() => {
+    if (!showCameraModal || capturedPhotoUri || cameraReady || cameraError) {
+      return;
+    }
+
+    const fallbackReadyTimeout = setTimeout(() => {
+      setCameraReady(true);
+    }, 3200);
+
+    return () => clearTimeout(fallbackReadyTimeout);
+  }, [showCameraModal, capturedPhotoUri, cameraReady, cameraError]);
+
   const returnToRouteDetail = () => {
     navigation.dispatch(
       StackActions.popTo('RouteDetail', {
@@ -402,11 +414,16 @@ export function DeliveryScreen({ route, navigation }: Props) {
       >
         <View style={styles.cameraContainer}>
           {capturedPhotoUri ? (
-            <Image source={{ uri: capturedPhotoUri }} style={styles.cameraView} resizeMode="cover" />
+            <Image
+              source={{ uri: capturedPhotoUri }}
+              style={styles.cameraView}
+              resizeMode="cover"
+            />
           ) : (
             <CameraView
               ref={cameraRef}
               style={styles.cameraView}
+              pointerEvents="none"
               facing="back"
               onCameraReady={() => setCameraReady(true)}
               onMountError={(event) => {
@@ -420,7 +437,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           )}
 
           {!capturedPhotoUri && cameraError ? (
-            <View style={styles.cameraOverlay}>
+            <View style={styles.cameraOverlay} pointerEvents="box-none">
               <Text style={styles.cameraOverlayError}>{cameraError}</Text>
               <Text style={styles.cameraOverlayHint}>
                 Se estiver em emulador iOS, a câmera pode não estar disponível.
@@ -429,7 +446,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           ) : null}
 
           {!capturedPhotoUri && !cameraError && !cameraReady ? (
-            <View style={styles.cameraOverlay}>
+            <View style={styles.cameraOverlay} pointerEvents="box-none">
               <ActivityIndicator size="large" color="#fff" />
               <Text style={styles.cameraOverlayText}>Iniciando câmera...</Text>
               {showCameraLoadingHint ? (
@@ -481,7 +498,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
                   variant="primary"
                   onPress={onCapturePhoto}
                   loading={cameraBusy}
-                  disabled={!cameraReady || cameraBusy}
+                  disabled={cameraBusy || Boolean(cameraError)}
                   style={styles.cameraActionButton}
                 />
               </>

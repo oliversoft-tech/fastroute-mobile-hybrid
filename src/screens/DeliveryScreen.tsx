@@ -99,6 +99,27 @@ export function DeliveryScreen({ route, navigation }: Props) {
   })();
 
   useEffect(() => {
+    setCurrentStatus(waypoint.status);
+    setLoading(false);
+    setCameraBusy(false);
+    setHasUploadedPhoto(false);
+    setUploadedPhotoUri(null);
+    setUploadedPhotoName(null);
+    setCapturedPhotoUri(null);
+    setCapturedPhotoName(null);
+    setShowCameraModal(false);
+    setCameraReady(false);
+    setCameraError(null);
+    setShowCameraLoadingHint(false);
+    setShowFailureModal(false);
+    setShowDeliveredConfirmModal(false);
+    setFailureStatus('FALHA TEMPO ADVERSO');
+    setFailureObs('');
+    setFeedbackError(null);
+    setFeedbackSuccess(null);
+  }, [waypoint.id, waypoint.status]);
+
+  useEffect(() => {
     if (!showCameraModal || capturedPhotoUri) {
       setShowCameraLoadingHint(false);
       return;

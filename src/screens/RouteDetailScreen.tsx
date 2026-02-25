@@ -28,6 +28,24 @@ import { openGoogleMapsRoute } from '../utils/googleMaps';
 import { applyWaypointOrder, getCachedRouteWaypointOrder } from '../state/waypointOrderCache';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RouteDetail'>;
+const startedRouteIdsLock = new Set<number>();
+
+function normalizeRouteStatus(value: string | undefined | null) {
+  return String(value ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+}
+
+function isRouteInProgress(normalizedStatus: string) {
+  return (
+    normalizedStatus.includes('EM_ROTA') ||
+    normalizedStatus.includes('EM ANDAMENTO') ||
+    normalizedStatus.includes('EM_ANDAMENTO') ||
+    normalizedStatus.includes('ANDAMENTO')
+  );
+}
 
 export function RouteDetailScreen({ route, navigation }: Props) {
   const { routeId, refreshAt } = route.params;
@@ -35,7 +53,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [startLocked, setStartLocked] = useState(false);
+  const [startLocked, setStartLocked] = useState(() => startedRouteIdsLock.has(routeId));
   const startRouteInFlightRef = useRef(false);
 
   const loadRouteDetails = useCallback(async () => {
@@ -90,22 +108,17 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   );
 
   useEffect(() => {
-    setStartLocked(false);
+    setStartLocked(startedRouteIdsLock.has(routeId));
   }, [routeId]);
 
   const waypoints = routeDetail?.waypoints ?? [];
-  const normalizedRouteStatus = String(routeDetail?.status ?? '')
-    .trim()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toUpperCase();
+  const normalizedRouteStatus = normalizeRouteStatus(routeDetail?.status);
   const isRouteConcludedOrCanceled = normalizedRouteStatus.includes('FINALIZ') || normalizedRouteStatus.includes('CONCLUID') || normalizedRouteStatus.includes('CANCEL');
   const canOpenWaypointDetail = !isRouteConcludedOrCanceled;
   const isStartDisabled =
     saving ||
     startLocked ||
-    normalizedRouteStatus === 'EM_ROTA' ||
-    normalizedRouteStatus === 'EM_ANDAMENTO' ||
+    isRouteInProgress(normalizedRouteStatus) ||
     isRouteConcludedOrCanceled;
 
   const onStartRoute = async () => {
@@ -117,7 +130,17 @@ export function RouteDetailScreen({ route, navigation }: Props) {
     try {
       setSaving(true);
       await startRoute(routeId);
+      startedRouteIdsLock.add(routeId);
       setStartLocked(true);
+      setRouteDetail((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        return {
+          ...previous,
+          status: 'EM_ANDAMENTO'
+        };
+      });
       await loadRouteDetails();
       if (waypoints.length === 0) {
         Alert.alert('Rota iniciada', `Rota #${routeId} iniciada.`);

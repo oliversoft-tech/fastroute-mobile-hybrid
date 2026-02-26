@@ -76,14 +76,9 @@ export function RoutesScreen({ navigation }: Props) {
             void (async () => {
               try {
                 setDeletingRouteId(routeId);
-                const result = await deleteRoute(routeId);
+                await deleteRoute(routeId);
                 await loadRoutes({ forceRefresh: true });
-                if (result.queuedForSync) {
-                  Alert.alert(
-                    'Rota removida localmente',
-                    'Exclusão enfileirada para sincronizar com o backend no próximo sync.'
-                  );
-                }
+                Alert.alert('Rota excluída', `Rota #${routeId} removida com sucesso.`);
               } catch (error) {
                 Alert.alert('Falha ao excluir rota', getApiError(error));
               } finally {

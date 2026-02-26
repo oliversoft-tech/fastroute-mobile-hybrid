@@ -6,7 +6,6 @@ import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { PrimaryButton } from '../components/PrimaryButton';
 import {
-  countPendingSyncOperations,
   getDailySyncTime,
   getLastSyncAt,
   setDailySyncTime
@@ -43,20 +42,14 @@ function normalizeTime(value: string) {
 export function SettingsScreen({}: Props) {
   const [dailySyncTime, setDailySyncTimeInput] = useState('19:00');
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
-  const [pendingOps, setPendingOps] = useState(0);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
-      const [time, lastSync, queueSize] = await Promise.all([
-        getDailySyncTime(),
-        getLastSyncAt(),
-        countPendingSyncOperations()
-      ]);
+      const [time, lastSync] = await Promise.all([getDailySyncTime(), getLastSyncAt()]);
       setDailySyncTimeInput(time);
       setLastSyncAt(lastSync);
-      setPendingOps(queueSize);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -88,7 +81,7 @@ export function SettingsScreen({}: Props) {
       Alert.alert(result.ok ? 'Sync concluído' : 'Falha no sync', formatSyncSummary(result));
       await loadData();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Falha ao executar sync manual.';
+      const message = error instanceof Error ? error.message : 'Falha ao sincronizar.';
       Alert.alert('Falha no sync', message);
     } finally {
       setLoading(false);
@@ -109,12 +102,9 @@ export function SettingsScreen({}: Props) {
       }
     >
       <View style={styles.card}>
-        <Text style={styles.title}>Sincronização Offline</Text>
-        <Text style={styles.subtitle}>
-          O app funciona offline e só sincroniza manualmente ou no horário diário configurado.
-        </Text>
+        <Text style={styles.title}>Sincronização</Text>
 
-        <Text style={styles.label}>Horário do sync diário (HH:mm)</Text>
+        <Text style={styles.label}>Horário da sincronização diária (HH:mm)</Text>
         <TextInput
           value={dailySyncTime}
           onChangeText={setDailySyncTimeInput}
@@ -135,14 +125,11 @@ export function SettingsScreen({}: Props) {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.label}>Último sync</Text>
+        <Text style={styles.label}>Última sincronização</Text>
         <Text style={styles.value}>{formatLastSync(lastSyncAt)}</Text>
 
-        <Text style={[styles.label, styles.marginTop]}>Operações pendentes</Text>
-        <Text style={styles.value}>{pendingOps}</Text>
-
         <PrimaryButton
-          label="Sync Manual"
+          label="Sincronizar agora"
           onPress={() => {
             void onManualSync();
           }}
@@ -173,9 +160,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800'
   },
-  subtitle: {
-    color: colors.textSecondary
-  },
   label: {
     color: colors.textSecondary,
     fontSize: 12,
@@ -186,9 +170,6 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 15,
     fontWeight: '700'
-  },
-  marginTop: {
-    marginTop: 6
   },
   input: {
     borderRadius: 10,
@@ -203,4 +184,3 @@ const styles = StyleSheet.create({
     marginTop: 6
   }
 });
-

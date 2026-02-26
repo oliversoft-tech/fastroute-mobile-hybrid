@@ -168,7 +168,7 @@ async function processPendingQueue() {
       await markSyncOperationDone(item.id);
       processed += 1;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Falha ao sincronizar operação pendente.';
+      const message = error instanceof Error ? error.message : 'Falha ao sincronizar dados.';
       await markSyncOperationFailed(item.id, message);
       return { processed, failed: true, failedMessage: message };
     }
@@ -216,7 +216,7 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
       pulledRoutes: 0,
       processedOperations: queueResult.processed,
       pendingOperations,
-      error: queueResult.failedMessage ?? 'Falha ao sincronizar fila pendente.'
+      error: queueResult.failedMessage ?? 'Falha ao sincronizar dados.'
     };
   }
 
@@ -308,7 +308,7 @@ export function formatSyncSummary(result: SyncResult) {
     return result.error ?? 'Falha na sincronização.';
   }
 
-  return `Sync concluído. Rotas recebidas: ${result.pulledRoutes}. Operações enviadas: ${result.processedOperations}. Pendentes: ${result.pendingOperations}.`;
+  return `Sincronização concluída. Rotas atualizadas: ${result.pulledRoutes}.`;
 }
 
 export function subscribeSyncFinished(listener: SyncFinishedListener) {

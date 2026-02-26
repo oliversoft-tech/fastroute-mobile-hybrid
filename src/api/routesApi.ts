@@ -132,7 +132,7 @@ function ensureRouteExists(route: RouteDetail | null, routeId: number) {
   if (route) {
     return route;
   }
-  throw new Error(`Rota #${routeId} não encontrada no banco local. Faça sync manual primeiro.`);
+  throw new Error(`Rota #${routeId} não encontrada.`);
 }
 
 function isWaypointDeliveredStatus(status: string | WaypointStatus | undefined) {
@@ -214,7 +214,7 @@ export async function listRoutes(_options?: QueryCacheOptions) {
 export async function getRouteDetails(routeId: number, _options?: QueryCacheOptions) {
   const route = await getLocalRoute(routeId);
   if (!route) {
-    throw new Error(`Rota #${routeId} não encontrada no banco local. Faça sync manual primeiro.`);
+    throw new Error(`Rota #${routeId} não encontrada.`);
   }
   const waypoints = await listLocalWaypoints(routeId);
   return {
@@ -270,7 +270,7 @@ export async function updateWaypointStatus(
 ) {
   const localWaypoint = await getLocalWaypoint(waypointId);
   if (!localWaypoint) {
-    throw new Error(`Waypoint #${waypointId} não encontrado no banco local.`);
+    throw new Error(`Waypoint #${waypointId} não encontrado.`);
   }
   if (Number(localWaypoint.route_id) !== Number(routeId)) {
     throw new Error('Waypoint não pertence à rota selecionada.');

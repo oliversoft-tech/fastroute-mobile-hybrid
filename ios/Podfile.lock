@@ -56,6 +56,8 @@ PODS:
     - Yoga
   - ExpoSecureStore (14.0.1):
     - ExpoModulesCore
+  - ExpoSQLite (15.1.4):
+    - ExpoModulesCore
   - EXStructuredHeaders (4.0.0)
   - EXUpdates (0.27.5):
     - DoubleConversion
@@ -1703,6 +1705,7 @@ DEPENDENCIES:
   - ExpoLinking (from `../node_modules/expo-linking/ios`)
   - ExpoModulesCore (from `../node_modules/expo-modules-core`)
   - ExpoSecureStore (from `../node_modules/expo-secure-store/ios`)
+  - ExpoSQLite (from `../node_modules/expo-sqlite/ios`)
   - EXStructuredHeaders (from `../node_modules/expo-structured-headers/ios`)
   - EXUpdates (from `../node_modules/expo-updates/ios`)
   - EXUpdatesInterface (from `../node_modules/expo-updates-interface/ios`)
@@ -1818,6 +1821,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-modules-core"
   ExpoSecureStore:
     :path: "../node_modules/expo-secure-store/ios"
+  ExpoSQLite:
+    :path: "../node_modules/expo-sqlite/ios"
   EXStructuredHeaders:
     :path: "../node_modules/expo-structured-headers/ios"
   EXUpdates:
@@ -1974,6 +1979,7 @@ SPEC CHECKSUMS:
   ExpoLinking: 0381341519ca7180a3a057d20edb1cf6a908aaf4
   ExpoModulesCore: d786e1b76105f52b2a2aef218464e9d05fc1efd4
   ExpoSecureStore: d006eea5e316283099d46f80a6b10055b89a6008
+  ExpoSQLite: a55722487de46cdb8d87992e63a19c069818083c
   EXStructuredHeaders: 09c70347b282e3d2507e25fb4c747b1b885f87f6
   EXUpdates: 7041b8884db8887eb1e0297079d66073fab010dc
   EXUpdatesInterface: 1dcebac98ac5dad4289e6ff2bd5616822e894397
@@ -2049,6 +2055,6 @@ SPEC CHECKSUMS:
   Yoga: be6f55a028e86c83ae066f018e9b5d24ffc45436
   ZXingObjC: 8898711ab495761b2dbbdec76d90164a6d7e14c5
 
-PODFILE CHECKSUM: 03a4b34364c13213b10c873da9c8f3df6f83fb12
+PODFILE CHECKSUM: 00ba4478415fdef14d7f32aaeb006914d416580b
 
 COCOAPODS: 1.16.2

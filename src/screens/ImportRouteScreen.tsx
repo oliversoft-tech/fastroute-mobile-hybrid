@@ -71,8 +71,8 @@ export function ImportRouteScreen({ navigation }: Props) {
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
       Alert.alert(
-        'Importação enfileirada',
-        'Arquivo salvo no modo offline. O envio para o backend será feito apenas no Sync Manual ou no Sync diário configurado.'
+        'Rota importada com sucesso',
+        'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.'
       );
       navigation.goBack();
     } catch (error) {

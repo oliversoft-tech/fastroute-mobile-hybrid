@@ -9,6 +9,7 @@
     "android:dev": "expo run:android",
     "android:sim": "bash ./scripts/start-android-sim.sh",
     "ios": "bash ./scripts/build-install-ios-local.sh",
+    "ios:device": "bash ./scripts/build-install-ios-device-local.sh",
     "ios:dev": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",

@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_ROOT="${IOS_DEVICE_BUILD_ROOT:-/tmp/fastroute-mobile-hybrid-device-build}"
 SCHEME="${IOS_SCHEME:-FastRoute}"
-CONFIGURATION="${IOS_CONFIGURATION:-Debug}"
+CONFIGURATION="${IOS_CONFIGURATION:-Release}"
 BUNDLE_ID="${IOS_BUNDLE_ID:-com.oliverbill.fastroutemobile}"
 WORKSPACE_PATH="ios/FastRoute.xcworkspace"
 

@@ -49,6 +49,7 @@ type SyncFinishedListener = (result: SyncResult) => void;
 
 let syncInFlight: Promise<SyncResult> | null = null;
 const syncFinishedListeners = new Set<SyncFinishedListener>();
+const SYNC_TIMEOUT_MS = 45000;
 
 function notifySyncFinished(result: SyncResult) {
   syncFinishedListeners.forEach((listener) => {
@@ -87,9 +88,10 @@ async function processQueueItem(item: SyncQueueItem) {
     const file = {
       uri: String(payload.uri ?? ''),
       name: String(payload.name ?? ''),
-      mimeType: payload.mimeType ? String(payload.mimeType) : undefined
+      mimeType: payload.mimeType ? String(payload.mimeType) : undefined,
+      epsMeters: Number(payload.eps_meters)
     };
-    await importOrdersRemote(file as any);
+    await importOrdersRemote(file);
     return;
   }
 
@@ -246,9 +248,34 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
   };
 }
 
+async function runSyncWithTimeout(trigger: SyncTrigger): Promise<SyncResult> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutResultPromise = new Promise<SyncResult>((resolve) => {
+    timeoutId = setTimeout(() => {
+      void (async () => {
+        const pendingOperations = await countPendingSyncOperations();
+        resolve({
+          ok: false,
+          trigger,
+          pulledRoutes: 0,
+          processedOperations: 0,
+          pendingOperations,
+          error: 'Tempo limite da sincronização excedido. Tente novamente.'
+        });
+      })();
+    }, SYNC_TIMEOUT_MS);
+  });
+
+  const result = await Promise.race([runSync(trigger), timeoutResultPromise]);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+  }
+  return result;
+}
+
 export async function syncNow(trigger: SyncTrigger = 'manual'): Promise<SyncResult> {
   if (!syncInFlight) {
-    syncInFlight = runSync(trigger)
+    syncInFlight = runSyncWithTimeout(trigger)
       .then((result) => {
         notifySyncFinished(result);
         return result;

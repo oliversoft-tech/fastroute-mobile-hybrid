@@ -1,8 +1,5 @@
 import {
-  canFinishRoute,
-  isAllowedWaypointCurrentStatus,
-  isAllowedWaypointTargetStatus,
-  validateFinishWaypoint
+  canFinishRoute
 } from '@oliverbill/fastroute-domain';
 import * as FileSystem from 'expo-file-system';
 import { RouteDetail, Waypoint, WaypointStatus } from './types';
@@ -276,40 +273,9 @@ export async function updateWaypointStatus(
     throw new Error('Waypoint não pertence à rota selecionada.');
   }
 
-  const currentStatus = mapWaypointStatusToDomain(localWaypoint.status);
-  if (!isAllowedWaypointCurrentStatus(currentStatus)) {
-    throw new Error(`Status atual inválido para finalizar waypoint: ${localWaypoint.status}`);
-  }
-
   const targetStatus = mapTargetStatusToDomain(status);
-  if (!isAllowedWaypointTargetStatus(targetStatus)) {
-    throw new Error('Status de destino inválido para finalização do waypoint.');
-  }
 
   const normalizedFileName = options?.file_name?.trim() || `entrega_${waypointId}.jpg`;
-  const photo = {
-    waypoint_id: waypointId,
-    filename: normalizedFileName,
-    user_id: String(options?.user_id ?? localWaypoint.user_id ?? 'offline-user'),
-    object_path: normalizedFileName,
-    file_size_bytes: 1,
-    photo_url: options?.image_uri?.trim() || `offline://${normalizedFileName}`
-  };
-
-  const validation = validateFinishWaypoint({
-    currentWaypoint: {
-      id: localWaypoint.id,
-      route_id: localWaypoint.route_id,
-      status: currentStatus
-    },
-    targetStatus,
-    obs_falha: options?.obs_falha ?? '',
-    photo
-  });
-
-  if (!validation.ok) {
-    throw new Error(validation.error);
-  }
 
   const localStatus = mapDomainStatusToLocal(targetStatus);
   await updateLocalWaypointStatus(waypointId, localStatus);

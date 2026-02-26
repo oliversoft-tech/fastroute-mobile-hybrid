@@ -92,7 +92,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
-  const canEditWaypoint = !isFinishedWaypointStatus(currentStatus);
   const payloadUserId = (() => {
     const authContextUserId = userId?.trim() ?? '';
     if (/^\d+$/.test(authContextUserId)) {
@@ -264,14 +263,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onTakePhoto = async () => {
-    if (!canEditWaypoint) {
-      Alert.alert(
-        'Ação indisponível',
-        'Não é possível alterar waypoint com status ENTREGUE ou FALHA.'
-      );
-      return;
-    }
-
     if (Platform.OS === 'web') {
       setFeedbackError(
         'No preview web não há câmera nativa. Abra no app Android/iOS (Expo Go) para tirar a foto.'
@@ -388,14 +379,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onConfirmDelivered = () => {
-    if (!canEditWaypoint) {
-      Alert.alert(
-        'Ação indisponível',
-        'Não é possível alterar waypoint com status ENTREGUE ou FALHA.'
-      );
-      return;
-    }
-
     if (!hasUploadedPhoto) {
       setShowDeliveredConfirmModal(true);
       return;
@@ -411,11 +394,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
   };
 
   const onConfirmFailure = async () => {
-    if (!canEditWaypoint) {
-      Alert.alert('Ação indisponível', 'Não é possível alterar waypoint com status ENTREGUE ou FALHA.');
-      return;
-    }
-
     const obsFalha = failureObs;
     setShowFailureModal(false);
     setFailureObs('');
@@ -458,7 +436,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="primary"
           onPress={onTakePhoto}
           loading={cameraBusy}
-          disabled={loading || !canEditWaypoint}
           style={styles.button}
         />
         <Text style={styles.photoStatus}>
@@ -487,25 +464,14 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="success"
           onPress={onConfirmDelivered}
           loading={loading}
-          disabled={cameraBusy || !canEditWaypoint}
           style={styles.button}
         />
 
         <PrimaryButton
           label="Marcar FALHA"
           variant="danger"
-          onPress={() => {
-            if (!canEditWaypoint) {
-              Alert.alert(
-                'Ação indisponível',
-                'Não é possível alterar waypoint com status ENTREGUE ou FALHA.'
-              );
-              return;
-            }
-            setShowFailureModal(true);
-          }}
+          onPress={() => setShowFailureModal(true)}
           loading={loading}
-          disabled={cameraBusy || !canEditWaypoint}
           style={styles.button}
         />
       </View>

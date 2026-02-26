@@ -1149,12 +1149,15 @@ export async function deleteRoute(routeId: number) {
   }
 
   const callDelete = async () => {
-    const response = await authorizedFetch(buildApiUrl(`route/${normalizedRouteId}`), {
+    const response = await authorizedFetch(
+      buildApiUrl(`route?route_id=${encodeURIComponent(String(normalizedRouteId))}`),
+      {
       method: 'DELETE',
       headers: {
         Accept: 'application/json'
       }
-    });
+    }
+    );
     const rawBody = await response.text();
     const parsedBody = parseApiResponseBody(rawBody);
     return { response, parsedBody };

@@ -8,6 +8,7 @@ interface LocalFile {
   name: string;
   mimeType?: string;
   webFile?: Blob;
+  epsMeters?: number;
 }
 
 function buildApiUrl(path: string) {
@@ -126,6 +127,13 @@ export async function importOrders(file: LocalFile) {
       name: file.name,
       type: file.mimeType ?? 'application/octet-stream'
     } as unknown as Blob);
+  }
+
+  const parsedEpsMeters = Number(file.epsMeters);
+  if (Number.isFinite(parsedEpsMeters) && parsedEpsMeters > 0) {
+    const epsValue = String(Math.trunc(parsedEpsMeters));
+    formData.append('eps_meters', epsValue);
+    formData.append('eps', epsValue);
   }
 
   const response = await authorizedFetch(buildApiUrl('route/import'), {

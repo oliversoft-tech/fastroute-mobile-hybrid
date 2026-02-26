@@ -4,6 +4,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
@@ -23,6 +24,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 export function ImportRouteScreen({ navigation }: Props) {
   const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
   const [loading, setLoading] = useState(false);
+  const [epsMeters, setEpsMeters] = useState('50');
   const [result, setResult] = useState<ImportResult | null>(null);
   const [recentFiles, setRecentFiles] = useState<Array<{ name: string; sizeKb: number; type: string }>>([]);
 
@@ -60,12 +62,19 @@ export function ImportRouteScreen({ navigation }: Props) {
       return;
     }
 
+    const parsedEpsMeters = Number(epsMeters);
+    if (!Number.isFinite(parsedEpsMeters) || parsedEpsMeters <= 0) {
+      Alert.alert('EPS inválido', 'Informe o EPS em metros com valor maior que zero.');
+      return;
+    }
+
     try {
       setLoading(true);
       const payload = await importOrders({
         uri: selectedFile.uri,
         name: selectedFile.name,
         mimeType: selectedFile.mimeType,
+        epsMeters: Math.trunc(parsedEpsMeters),
         webFile: (selectedFile as DocumentPicker.DocumentPickerAsset & { file?: Blob }).file
       });
       setResult(payload);
@@ -141,6 +150,18 @@ export function ImportRouteScreen({ navigation }: Props) {
             <Text style={styles.fileMeta}>{Math.round((selectedFile.size ?? 0) / 1024)} KB</Text>
           </View>
         ) : null}
+
+        <View style={styles.inputBlock}>
+          <Text style={styles.inputLabel}>EPS (metros)</Text>
+          <TextInput
+            value={epsMeters}
+            onChangeText={setEpsMeters}
+            keyboardType="number-pad"
+            placeholder="Ex: 50"
+            placeholderTextColor={colors.textSecondary}
+            style={styles.input}
+          />
+        </View>
 
         <PrimaryButton
           label="Confirmar importação"
@@ -254,6 +275,24 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
     backgroundColor: '#fff'
+  },
+  inputBlock: {
+    gap: 6
+  },
+  inputLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase'
+  },
+  input: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#fff',
+    color: colors.textPrimary,
+    paddingHorizontal: 12,
+    paddingVertical: 10
   },
   fileName: {
     color: colors.textPrimary,

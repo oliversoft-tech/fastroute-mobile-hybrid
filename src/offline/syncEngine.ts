@@ -16,6 +16,7 @@ import {
   getLastDailySyncDate,
   getDailySyncTime,
   isInitialSyncDone,
+  listLocalRoutes,
   listPendingSyncOperations,
   markSyncOperationDone,
   markSyncOperationFailed,
@@ -208,7 +209,14 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
   }
 
   const queueResult = await processPendingQueue();
-  if (queueResult.failed) {
+  const queueWarning = queueResult.failed
+    ? queueResult.failedMessage ?? 'Falha ao sincronizar dados pendentes.'
+    : undefined;
+
+  let pulledRoutes = 0;
+  try {
+    pulledRoutes = await pullRemoteSnapshot();
+  } catch (error) {
     const pendingOperations = await countPendingSyncOperations();
     return {
       ok: false,
@@ -216,11 +224,10 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
       pulledRoutes: 0,
       processedOperations: queueResult.processed,
       pendingOperations,
-      error: queueResult.failedMessage ?? 'Falha ao sincronizar dados.'
+      error: error instanceof Error ? error.message : 'Falha ao atualizar rotas.'
     };
   }
 
-  const pulledRoutes = await pullRemoteSnapshot();
   const nowIso = new Date().toISOString();
   await setLastSyncAt(nowIso);
 
@@ -234,7 +241,8 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
     trigger,
     pulledRoutes,
     processedOperations: queueResult.processed,
-    pendingOperations
+    pendingOperations,
+    error: queueWarning
   };
 }
 
@@ -292,8 +300,12 @@ export async function maybeRunInitialAutoSync() {
     return null;
   }
 
-  if (await isInitialSyncDone()) {
-    return null;
+  const initialSyncDone = await isInitialSyncDone();
+  if (initialSyncDone) {
+    const localRoutes = await listLocalRoutes();
+    if (localRoutes.length > 0) {
+      return null;
+    }
   }
 
   const result = await syncNow('manual');

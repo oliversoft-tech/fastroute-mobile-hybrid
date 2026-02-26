@@ -19,7 +19,7 @@ import { refreshWithSupabase } from '../api/supabaseClient';
 import { resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/authStorage';
 import { invalidateRouteQueryCache } from '../state/routesQueryCache';
-import { maybeRunInitialAutoSync } from '../offline/syncEngine';
+import { maybeRunInitialAutoSync, syncNow } from '../offline/syncEngine';
 
 interface AuthState {
   userEmail: string | null;
@@ -116,6 +116,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     } catch (storageError) {
       console.warn('[Auth] Falha ao persistir sessão após login:', storageError);
+    }
+
+    try {
+      await syncNow('manual');
+    } catch (syncError) {
+      console.warn('[Auth] Falha ao sincronizar rotas após login:', syncError);
     }
   }, []);
 

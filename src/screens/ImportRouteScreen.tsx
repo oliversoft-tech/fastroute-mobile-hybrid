@@ -15,6 +15,8 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { importOrders } from '../api/ordersApi';
 import { getApiError } from '../api/httpClient';
 import { ImportResult } from '../api/types';
+import { listRouteWaypoints, listRoutes } from '../api/routesApi';
+import { syncNow } from '../offline/syncEngine';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -70,11 +72,47 @@ export function ImportRouteScreen({ navigation }: Props) {
       const importedEntry = toRecentFileEntry(selectedFile);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
+      const syncResult = await syncNow('manual');
+      if (!syncResult.ok) {
+        throw new Error(syncResult.error ?? 'Falha ao sincronizar rotas após importação.');
+      }
+
+      const routes = await listRoutes({ forceRefresh: true });
+      const routeIdsFromResponse = [
+        ...(payload.route_ids ?? []),
+        Number(payload.route_id)
+      ]
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .map((value) => Math.trunc(value));
+      const preferredRouteIds = [...new Set(routeIdsFromResponse)];
+      const targetRoute =
+        routes.find((route) => preferredRouteIds.includes(route.id)) ??
+        routes[0];
+
+      if (!targetRoute) {
+        Alert.alert('Rota importada com sucesso');
+        navigation.goBack();
+        return;
+      }
+
+      const waypoints = await listRouteWaypoints(targetRoute.id, { forceRefresh: true });
+
       Alert.alert(
         'Rota importada com sucesso',
-        'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.'
+        'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.',
+        [
+          {
+            text: 'OK',
+            onPress: () =>
+              navigation.replace('Map', {
+                routeId: targetRoute.id,
+                waypoints,
+                routeStatus: targetRoute.status
+              })
+          }
+        ]
       );
-      navigation.goBack();
     } catch (error) {
       Alert.alert('Erro na importação', getApiError(error));
     } finally {

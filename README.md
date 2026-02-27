@@ -19,7 +19,7 @@ App React Native com Expo, inspirado nas telas do prototipo, para operacao de ro
 
 Base URL configurada:
 
-`https://webhook.oliversoft.tech/webhook/`
+`http://localhost:5678/webhook`
 
 Voce pode sobrescrever por variavel de ambiente:
 

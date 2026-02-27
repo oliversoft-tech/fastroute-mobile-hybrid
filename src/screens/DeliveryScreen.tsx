@@ -369,7 +369,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
       setCapturedPhotoName(null);
       setCameraError(null);
       setShowCameraLoadingHint(false);
-      setFeedbackSuccess('Foto salva localmente. Será enviada ao confirmar o status.');
+      setFeedbackSuccess('Foto salva com sucesso.');
       Alert.alert('Foto confirmada', 'Foto salva com sucesso.');
     } catch (error) {
       Alert.alert('Falha ao confirmar foto', getApiError(error));

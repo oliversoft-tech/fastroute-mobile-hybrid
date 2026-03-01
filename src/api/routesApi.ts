@@ -18,12 +18,6 @@ import {
   updateLocalWaypointStatus,
   upsertLocalRoute
 } from '../offline/localDb';
-import {
-  deleteRoute as deleteRouteRemote,
-  getWaypointPhoto as getWaypointPhotoRemote
-} from './routesRemoteApi';
-import { API_BASE_URL } from '../config/api';
-import { getAuthAccessToken } from './httpClient';
 
 interface QueryCacheOptions {
   forceRefresh?: boolean;
@@ -157,19 +151,6 @@ function normalizePhotoFileName(fileName: string, waypointId: number) {
   return trimmed.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-function normalizePhotoUrl(rawUrl: string) {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-  const base = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
-  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-  return `${base}${normalizedPath}`;
-}
-
 async function persistWaypointPhotoBase64(
   waypointId: number,
   fileName: string,
@@ -180,26 +161,6 @@ async function persistWaypointPhotoBase64(
   const localUri = `${directory}/${normalizePhotoFileName(fileName, waypointId)}`;
   await FileSystem.writeAsStringAsync(localUri, base64, {
     encoding: FileSystem.EncodingType.Base64
-  });
-  return localUri;
-}
-
-async function persistWaypointPhotoFromUrl(
-  waypointId: number,
-  fileName: string,
-  rawUrl: string
-) {
-  const directory = ensureWaypointPhotoDirectory();
-  await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
-  const localUri = `${directory}/${normalizePhotoFileName(fileName, waypointId)}`;
-  const normalizedUrl = normalizePhotoUrl(rawUrl);
-  const token = getAuthAccessToken();
-  await FileSystem.downloadAsync(normalizedUrl, localUri, {
-    headers: token
-      ? {
-          Authorization: `Bearer ${token}`
-        }
-      : undefined
   });
   return localUri;
 }
@@ -348,39 +309,11 @@ export async function getWaypointDeliveryPhoto(
   if (!isWaypointDeliveredStatus(currentStatus)) {
     return null;
   }
-
-  const remotePhoto = await getWaypointPhotoRemote(waypointId);
-  if (!remotePhoto) {
-    return null;
-  }
-
-  let persistedUri: string;
-  if (remotePhoto.kind === 'base64') {
-    persistedUri = await persistWaypointPhotoBase64(
-      waypointId,
-      remotePhoto.fileName,
-      remotePhoto.base64
-    );
-  } else {
-    persistedUri = await persistWaypointPhotoFromUrl(
-      waypointId,
-      remotePhoto.fileName,
-      remotePhoto.url
-    );
-  }
-
-  await upsertLocalWaypointPhotoUri(waypointId, persistedUri);
-  return persistedUri;
+  return null;
 }
 
 export async function deleteRoute(routeId: number): Promise<DeleteRouteResult> {
   await deleteLocalRoute(routeId);
-
-  try {
-    await deleteRouteRemote(routeId);
-    return { queuedForSync: false };
-  } catch {
-    await enqueueSyncOperation('DELETE_ROUTE', { routeId });
-    return { queuedForSync: true };
-  }
+  await enqueueSyncOperation('DELETE_ROUTE', { routeId });
+  return { queuedForSync: true };
 }

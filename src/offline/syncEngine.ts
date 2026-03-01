@@ -1,20 +1,12 @@
-import { ImportResult, RouteDetail } from '../api/types';
-import { importOrders as importOrdersRemote } from '../api/ordersRemoteApi';
-import { getAuthAccessToken } from '../api/httpClient';
-import {
-  deleteRoute as deleteRouteRemote,
-  finishRoute as finishRouteRemote,
-  listRouteWaypoints as listRouteWaypointsRemote,
-  listRoutes as listRoutesRemote,
-  startRoute as startRouteRemote,
-  updateWaypointOrder as updateWaypointOrderRemote,
-  updateWaypointStatus as updateWaypointStatusRemote
-} from '../api/routesRemoteApi';
+import { RouteDetail, RouteStatus, Waypoint, WaypointStatus } from '../api/types';
+import { getApiError, getAuthAccessToken, httpClient } from '../api/httpClient';
+import { buildFastRouteApiUrl } from '../config/api';
 import {
   SyncQueueItem,
   countPendingSyncOperations,
-  getLastDailySyncDate,
   getDailySyncTime,
+  getLastDailySyncDate,
+  getLastSyncAt,
   isInitialSyncDone,
   listLocalRoutes,
   listPendingSyncOperations,
@@ -27,14 +19,6 @@ import {
 } from './localDb';
 
 type SyncTrigger = 'manual' | 'scheduled';
-type SyncWaypointFinishStatus =
-  | 'PENDENTE'
-  | 'REORDENADO'
-  | 'EM_ROTA'
-  | 'CONCLUIDO'
-  | 'ENTREGUE'
-  | 'FALHA TEMPO ADVERSO'
-  | 'FALHA MORADOR AUSENTE';
 
 export interface SyncResult {
   ok: boolean;
@@ -47,18 +31,261 @@ export interface SyncResult {
 
 type SyncFinishedListener = (result: SyncResult) => void;
 
+interface ApiRecord {
+  [key: string]: unknown;
+}
+
 let syncInFlight: Promise<SyncResult> | null = null;
 const syncFinishedListeners = new Set<SyncFinishedListener>();
 const SYNC_TIMEOUT_MS = 45000;
 
-function notifySyncFinished(result: SyncResult) {
-  syncFinishedListeners.forEach((listener) => {
-    try {
-      listener(result);
-    } catch {
-      // Ignora erros de listener para não quebrar o fluxo de sync.
+function normalizeText(value: unknown) {
+  return String(value ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+}
+
+function normalizeRouteStatus(value: unknown): RouteStatus {
+  const normalized = normalizeText(value);
+
+  if (normalized.includes('CRIADA')) {
+    return 'CRIADA';
+  }
+  if (normalized.includes('EM_ROTA')) {
+    return 'EM_ROTA';
+  }
+  if (normalized.includes('EM_ANDAMENTO') || normalized.includes('EM ANDAMENTO')) {
+    return 'EM_ANDAMENTO';
+  }
+  if (normalized.includes('FINAL') || normalized.includes('CONCL')) {
+    return 'FINALIZADA';
+  }
+  return 'PENDENTE';
+}
+
+function normalizeWaypointStatus(value: unknown): WaypointStatus {
+  const normalized = normalizeText(value);
+
+  if (normalized.includes('REORDEN')) {
+    return 'REORDENADO';
+  }
+  if (normalized.includes('EM_ROTA')) {
+    return 'EM_ROTA';
+  }
+  if (normalized.includes('FALHA TEMPO ADVERSO')) {
+    return 'FALHA TEMPO ADVERSO';
+  }
+  if (normalized.includes('FALHA MORADOR AUSENTE')) {
+    return 'FALHA MORADOR AUSENTE';
+  }
+  if (normalized.includes('CONCL') || normalized.includes('ENTREGUE')) {
+    return 'CONCLUIDO';
+  }
+  return 'PENDENTE';
+}
+
+function asRecord(value: unknown): ApiRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as ApiRecord;
+}
+
+function toPositiveInt(value: unknown, fallback: number) {
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function toNullableNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function pickString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== 'string') {
+      continue;
     }
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function extractArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const candidates = [
+    record.routes,
+    record.items,
+    record.result,
+    record.results,
+    record.records,
+    record.snapshot,
+    record.data,
+    record.changes,
+    record.payload
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+    const nested = asRecord(candidate);
+    if (nested?.routes && Array.isArray(nested.routes)) {
+      return nested.routes;
+    }
+  }
+
+  return [];
+}
+
+function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoint | null {
+  const item = asRecord(raw);
+  if (!item) {
+    return null;
+  }
+
+  const address = asRecord(item.address);
+  const id = toPositiveInt(item.id ?? item.waypoint_id ?? item.waypointId, 0);
+  if (!id) {
+    return null;
+  }
+
+  const seqOrder = toPositiveInt(item.seq_order ?? item.seqorder ?? item.seqOrder, index + 1);
+  const latitude = toNullableNumber(item.latitude ?? item.lat ?? address?.latitude ?? address?.lat);
+  const longitude = toNullableNumber(item.longitude ?? item.lng ?? item.lon ?? address?.longitude ?? address?.lng);
+
+  return {
+    id,
+    route_id: toPositiveInt(item.route_id ?? item.routeId, routeId),
+    address_id: toPositiveInt(item.address_id ?? item.addressId ?? address?.id, id),
+    user_id: toNullableNumber(item.user_id ?? item.userId),
+    seq_order: seqOrder,
+    status: normalizeWaypointStatus(item.status),
+    title: pickString(
+      item.detailed_address,
+      item.title,
+      item.name,
+      address?.detailed_address,
+      address?.title,
+      address?.street
+    ),
+    subtitle: pickString(item.subtitle, item.address_subtitle, address?.subtitle, address?.city),
+    latitude,
+    longitude
+  };
+}
+
+function normalizeRoute(raw: unknown): RouteDetail | null {
+  const item = asRecord(raw);
+  if (!item) {
+    return null;
+  }
+
+  const id = toPositiveInt(item.id ?? item.route_id ?? item.routeId, 0);
+  if (!id) {
+    return null;
+  }
+
+  const rawWaypoints =
+    extractArray(item.waypoints).length > 0
+      ? extractArray(item.waypoints)
+      : extractArray(item.route_waypoints).length > 0
+        ? extractArray(item.route_waypoints)
+        : extractArray(item.stops).length > 0
+          ? extractArray(item.stops)
+          : extractArray(item.points);
+
+  const waypoints = rawWaypoints
+    .map((entry, index) => normalizeWaypoint(entry, id, index))
+    .filter((entry): entry is Waypoint => Boolean(entry))
+    .sort((a, b) => a.seq_order - b.seq_order || a.id - b.id);
+
+  return {
+    id,
+    cluster_id: Math.trunc(Number(item.cluster_id ?? item.clusterId ?? 0)),
+    status: normalizeRouteStatus(item.status),
+    created_at: pickString(item.created_at, item.createdAt) ?? new Date().toISOString(),
+    waypoints_count: toPositiveInt(item.waypoints_count ?? item.waypointsCount, waypoints.length),
+    waypoints
+  };
+}
+
+function extractRoutesFromPullResponse(payload: unknown): RouteDetail[] {
+  const directRoutes = extractArray(payload)
+    .map((entry) => normalizeRoute(entry))
+    .filter((entry): entry is RouteDetail => Boolean(entry));
+
+  const root = asRecord(payload);
+  if (!root) {
+    return directRoutes;
+  }
+
+  const changeRoutes = extractArray(root.changes)
+    .flatMap((change) => {
+      const changeRecord = asRecord(change);
+      if (!changeRecord) {
+        return [] as unknown[];
+      }
+
+      return [
+        changeRecord.route,
+        changeRecord.data,
+        changeRecord.payload,
+        asRecord(changeRecord.payload)?.route,
+        asRecord(changeRecord.data)?.route
+      ].filter((candidate) => candidate !== undefined) as unknown[];
+    })
+    .map((entry) => normalizeRoute(entry))
+    .filter((entry): entry is RouteDetail => Boolean(entry));
+
+  const deduplicated = new Map<number, RouteDetail>();
+  [...directRoutes, ...changeRoutes].forEach((route) => {
+    deduplicated.set(route.id, route);
   });
+  return Array.from(deduplicated.values());
+}
+
+function readErrorMessage(payload: unknown, fallback: string) {
+  const record = asRecord(payload);
+  if (!record) {
+    return fallback;
+  }
+
+  const candidates = [record.msg, record.message, record.error, record.hint];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  return fallback;
+}
+
+function isPayloadOk(payload: unknown) {
+  const record = asRecord(payload);
+  if (!record) {
+    return true;
+  }
+  if (record.ok === false) {
+    return false;
+  }
+  const statusCode = Number(record.statusCode ?? record.status_code ?? record.code);
+  return !(Number.isFinite(statusCode) && statusCode >= 400);
 }
 
 function toLocalDate(now: Date) {
@@ -73,89 +300,24 @@ function parseSyncTime(value: string) {
   if (!match) {
     return null;
   }
+
   const hh = Number(match[1]);
   const mm = Number(match[2]);
   if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) {
     return null;
   }
+
   return { hh, mm };
 }
 
-async function processQueueItem(item: SyncQueueItem) {
-  const payload = item.payload;
-
-  if (item.opType === 'IMPORT_ROUTE_FILE') {
-    const file = {
-      uri: String(payload.uri ?? ''),
-      name: String(payload.name ?? ''),
-      mimeType: payload.mimeType ? String(payload.mimeType) : undefined,
-      epsMeters: Number(payload.eps_meters)
-    };
-    await importOrdersRemote(file);
-    return;
-  }
-
-  if (item.opType === 'START_ROUTE') {
-    const routeId = Math.trunc(Number(payload.routeId));
-    if (Number.isFinite(routeId) && routeId > 0) {
-      await startRouteRemote(routeId);
+function notifySyncFinished(result: SyncResult) {
+  syncFinishedListeners.forEach((listener) => {
+    try {
+      listener(result);
+    } catch {
+      // Ignora erros de listener para não quebrar o fluxo de sync.
     }
-    return;
-  }
-
-  if (item.opType === 'FINISH_ROUTE') {
-    const routeId = Math.trunc(Number(payload.routeId));
-    if (Number.isFinite(routeId) && routeId > 0) {
-      await finishRouteRemote(routeId);
-    }
-    return;
-  }
-
-  if (item.opType === 'DELETE_ROUTE') {
-    const routeId = Math.trunc(Number(payload.routeId));
-    if (Number.isFinite(routeId) && routeId > 0) {
-      await deleteRouteRemote(routeId);
-    }
-    return;
-  }
-
-  if (item.opType === 'UPDATE_WAYPOINT_STATUS') {
-    const routeId = Math.trunc(Number(payload.routeId));
-    const waypointId = Math.trunc(Number(payload.waypointId));
-    const status = String(payload.status ?? 'PENDENTE') as SyncWaypointFinishStatus;
-    const options = (payload.options ?? {}) as {
-      obs_falha?: string;
-      file_name?: string;
-      user_id?: string | number;
-      address_id?: number;
-      image_uri?: string;
-    };
-    if (Number.isFinite(routeId) && routeId > 0 && Number.isFinite(waypointId) && waypointId > 0) {
-      await updateWaypointStatusRemote(routeId, waypointId, status, options);
-    }
-    return;
-  }
-
-  if (item.opType === 'REORDER_WAYPOINTS') {
-    const routeId = Math.trunc(Number(payload.routeId));
-    const reorderedWaypointsRaw = Array.isArray(payload.reorderedWaypoints)
-      ? payload.reorderedWaypoints
-      : [];
-    const reorderedWaypoints = reorderedWaypointsRaw
-      .map((entry) => ({
-        seqorder: Math.trunc(Number((entry as Record<string, unknown>).seqorder)),
-        waypoint_id: Math.trunc(Number((entry as Record<string, unknown>).waypoint_id))
-      }))
-      .filter((entry) => Number.isFinite(entry.seqorder) && Number.isFinite(entry.waypoint_id));
-
-    if (Number.isFinite(routeId) && routeId > 0) {
-      await updateWaypointOrderRemote({
-        routeId,
-        reorderedWaypoints
-      });
-    }
-    return;
-  }
+  });
 }
 
 async function processPendingQueue() {
@@ -164,37 +326,48 @@ async function processPendingQueue() {
     return { processed: 0, failed: false, failedMessage: null as string | null };
   }
 
-  let processed = 0;
-  for (const item of pending) {
-    try {
-      await processQueueItem(item);
-      await markSyncOperationDone(item.id);
-      processed += 1;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Falha ao sincronizar dados.';
-      await markSyncOperationFailed(item.id, message);
-      return { processed, failed: true, failedMessage: message };
-    }
-  }
+  const changes = pending.map((item: SyncQueueItem) => ({
+    id: item.id,
+    op_type: item.opType,
+    payload: item.payload,
+    created_at: item.createdAt,
+    retry_count: item.retryCount
+  }));
 
-  return { processed, failed: false, failedMessage: null as string | null };
+  try {
+    const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/push'), {
+      changes
+    });
+
+    if (!isPayloadOk(data)) {
+      throw new Error(readErrorMessage(data, 'Falha ao sincronizar dados pendentes.'));
+    }
+
+    await Promise.all(pending.map((item) => markSyncOperationDone(item.id)));
+    return { processed: pending.length, failed: false, failedMessage: null as string | null };
+  } catch (error) {
+    const message = getApiError(error);
+    await markSyncOperationFailed(pending[0].id, message);
+    return { processed: 0, failed: true, failedMessage: message };
+  }
 }
 
 async function pullRemoteSnapshot() {
-  const remoteRoutes = await listRoutesRemote({ forceRefresh: true });
-  const detailedRoutes = await Promise.all(
-    remoteRoutes.map(async (route) => {
-      const waypoints = await listRouteWaypointsRemote(route.id, { forceRefresh: true });
-      const detail: RouteDetail = {
-        ...route,
-        waypoints_count: waypoints.length,
-        waypoints
-      };
-      return detail;
-    })
-  );
-  await saveRouteSnapshot(detailedRoutes);
-  return detailedRoutes.length;
+  const lastSyncAt = await getLastSyncAt();
+  const payload = lastSyncAt ? { last_sync_at: lastSyncAt } : {};
+
+  const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/pull'), payload);
+
+  if (!isPayloadOk(data)) {
+    throw new Error(readErrorMessage(data, 'Falha ao atualizar rotas.'));
+  }
+
+  const routes = extractRoutesFromPullResponse(data);
+  if (routes.length > 0) {
+    await saveRouteSnapshot(routes);
+  }
+
+  return routes.length;
 }
 
 async function runSync(trigger: SyncTrigger): Promise<SyncResult> {

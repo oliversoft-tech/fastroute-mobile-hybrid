@@ -1,4 +1,5 @@
 import { httpClient } from './httpClient';
+import { buildFastRouteApiUrl } from '../config/api';
 
 interface LoginResponse {
   auth_token?: string;
@@ -28,6 +29,22 @@ export interface AuthTokens {
   userId: string | null;
 }
 
+function pickErrorMessage(payload: unknown, fallback: string) {
+  if (!payload || typeof payload !== 'object') {
+    return fallback;
+  }
+
+  const record = payload as Record<string, unknown>;
+  for (const key of ['msg', 'message', 'error', 'hint']) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return fallback;
+}
+
 function extractTokens(data: LoginResponse): AuthTokens {
   const accessToken =
     data.auth_token ??
@@ -54,10 +71,35 @@ function extractTokens(data: LoginResponse): AuthTokens {
 }
 
 export async function loginRequest(email: string, password: string) {
-  const { data } = await httpClient.post<LoginResponse>('login', {
-    email,
-    password
-  });
+  const endpoint = buildFastRouteApiUrl('/login');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-  return extractTokens(data);
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ email, password }),
+      signal: controller.signal
+    });
+
+    const text = await response.text();
+    const payload = text ? (JSON.parse(text) as LoginResponse) : ({} as LoginResponse);
+
+    if (!response.ok) {
+      throw new Error(
+        pickErrorMessage(payload, `Falha no login (HTTP ${response.status}).`)
+      );
+    }
+
+    return extractTokens(payload);
+  } catch (error) {
+    const { data } = await httpClient.post<LoginResponse>(endpoint, { email, password });
+    return extractTokens(data);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

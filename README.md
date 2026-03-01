@@ -17,13 +17,10 @@ App React Native com Expo, inspirado nas telas do prototipo, para operacao de ro
 
 ## API
 
-Base URL configurada:
+Base URLs configuradas:
 
-`https://webhook.oliversoft.tech/webhook/`
-
-Voce pode sobrescrever por variavel de ambiente:
-
-`EXPO_PUBLIC_API_BASE_URL`
+- `EXPO_PUBLIC_API_BASE_URL=http://localhost:5678/webhook/` (uso local/offline)
+- `EXPO_PUBLIC_FASTROUTE_API_BASE_URL=https://fastroute.oliversoft.tech` (login e sync)
 
 Refresh de token via Supabase SDK:
 

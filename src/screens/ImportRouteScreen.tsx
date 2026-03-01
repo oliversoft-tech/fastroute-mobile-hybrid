@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { PrimaryButton } from '../components/PrimaryButton';
@@ -17,6 +18,8 @@ import { importOrders } from '../api/ordersApi';
 import { getApiError } from '../api/httpClient';
 import { ImportResult } from '../api/types';
 import { listRouteWaypoints, listRoutes } from '../api/routesApi';
+import { consumePendingImportFile } from '../state/importFileSelection';
+import { useCallback } from 'react';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -26,6 +29,23 @@ export function ImportRouteScreen({ navigation }: Props) {
   const [epsMeters, setEpsMeters] = useState('50');
   const [result, setResult] = useState<ImportResult | null>(null);
   const [recentFiles, setRecentFiles] = useState<Array<{ name: string; sizeKb: number; type: string }>>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const localSelection = consumePendingImportFile();
+      if (!localSelection) {
+        return;
+      }
+
+      setSelectedFile({
+        uri: localSelection.uri,
+        name: localSelection.name,
+        mimeType: localSelection.mimeType,
+        size: localSelection.size
+      } as DocumentPicker.DocumentPickerAsset);
+      setResult(null);
+    }, [])
+  );
 
   const toRecentFileEntry = (file: DocumentPicker.DocumentPickerAsset) => ({
     name: file.name,

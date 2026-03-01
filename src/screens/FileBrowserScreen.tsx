@@ -2,14 +2,15 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
+import { setPendingImportFile } from '../state/importFileSelection';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'FileBrowser'>;
 
 const folders = [
-  { name: 'dianxin', date: 'Jul 19' },
-  { name: 'Documents', date: 'Sep 17', highlight: true },
-  { name: 'Download', date: '8:20 PM' },
-  { name: 'epsxe', date: 'Oct 11' }
+  { name: 'pedidos_driver_a.xlsx', date: '2.4 MB', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  { name: 'Documents.csv', date: '512 KB', highlight: true, mimeType: 'text/csv' },
+  { name: 'Download.xlsx', date: '1.8 MB', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  { name: 'epsxe.csv', date: '350 KB', mimeType: 'text/csv' }
 ];
 
 export function FileBrowserScreen({ navigation }: Props) {
@@ -20,7 +21,17 @@ export function FileBrowserScreen({ navigation }: Props) {
           <TouchableOpacity
             key={folder.name}
             style={[styles.row, folder.highlight && styles.highlightRow]}
-            onPress={() => navigation.goBack()}
+            onPress={() => {
+              setPendingImportFile({
+                uri: `file:///local/${folder.name}`,
+                name: folder.name,
+                mimeType: folder.mimeType,
+                size: folder.date.includes('MB')
+                  ? Math.round(Number(folder.date.replace('MB', '').trim()) * 1024 * 1024)
+                  : Math.round(Number(folder.date.replace('KB', '').trim()) * 1024)
+              });
+              navigation.goBack();
+            }}
           >
             <Text style={styles.icon}>[]</Text>
             <View style={styles.textCol}>

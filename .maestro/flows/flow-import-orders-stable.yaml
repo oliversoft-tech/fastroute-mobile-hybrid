@@ -1,0 +1,27 @@
+appId: com.oliverbill.fastroutemobile
+---
+- launchApp:
+    clearState: true
+
+- assertVisible: "Minhas Rotas"
+- tapOn: "Criar Rota"
+
+- assertVisible: "Importar arquivo de rota"
+- assertVisible: "Abrir arquivos locais"
+- tapOn: "Abrir arquivos locais"
+
+- assertVisible: "Documents.csv"
+- tapOn: "Documents.csv"
+
+- assertVisible: "Confirmar importação"
+- tapOn: "50"
+- eraseText
+- inputText: "100"
+- hideKeyboard
+
+- tapOn: "Confirmar importação"
+- assertVisible: "Rota importada com sucesso"
+- tapOn: "OK"
+
+- assertVisible: "Mapa da Rota"
+- assertVisible: "Confirmar ordem"

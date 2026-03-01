@@ -17,7 +17,6 @@ import { importOrders } from '../api/ordersApi';
 import { getApiError } from '../api/httpClient';
 import { ImportResult } from '../api/types';
 import { listRouteWaypoints, listRoutes } from '../api/routesApi';
-import { syncNow } from '../offline/syncEngine';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -80,11 +79,6 @@ export function ImportRouteScreen({ navigation }: Props) {
       setResult(payload);
       const importedEntry = toRecentFileEntry(selectedFile);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
-
-      const syncResult = await syncNow('manual');
-      if (!syncResult.ok) {
-        throw new Error(syncResult.error ?? 'Falha ao sincronizar rotas após importação.');
-      }
 
       const routes = await listRoutes({ forceRefresh: true });
       const routeIdsFromResponse = [

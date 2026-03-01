@@ -170,6 +170,11 @@ function normalizePhotoUrl(rawUrl: string) {
   return `${base}${normalizedPath}`;
 }
 
+function isLocalOnlyMode() {
+  const normalized = API_BASE_URL.trim().toLowerCase();
+  return normalized.includes('localhost') || normalized.includes('127.0.0.1');
+}
+
 async function persistWaypointPhotoBase64(
   waypointId: number,
   fileName: string,
@@ -375,6 +380,11 @@ export async function getWaypointDeliveryPhoto(
 
 export async function deleteRoute(routeId: number): Promise<DeleteRouteResult> {
   await deleteLocalRoute(routeId);
+
+  if (isLocalOnlyMode()) {
+    await enqueueSyncOperation('DELETE_ROUTE', { routeId });
+    return { queuedForSync: true };
+  }
 
   try {
     await deleteRouteRemote(routeId);

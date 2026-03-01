@@ -20,6 +20,7 @@ import { ImportResult } from '../api/types';
 import { listRouteWaypoints, listRoutes } from '../api/routesApi';
 import { consumePendingImportFile } from '../state/importFileSelection';
 import { useCallback } from 'react';
+import { syncNow } from '../offline/syncEngine';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -89,6 +90,9 @@ export function ImportRouteScreen({ navigation }: Props) {
 
     try {
       setLoading(true);
+      const routesBeforeImport = await listRoutes({ forceRefresh: true });
+      const routeIdsBeforeImport = new Set(routesBeforeImport.map((route) => route.id));
+
       const payload = await importOrders({
         uri: selectedFile.uri,
         name: selectedFile.name,
@@ -100,6 +104,11 @@ export function ImportRouteScreen({ navigation }: Props) {
       const importedEntry = toRecentFileEntry(selectedFile);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
+      const syncResult = await syncNow('manual', { fullPull: true });
+      if (!syncResult.ok) {
+        throw new Error(syncResult.error ?? 'Falha ao sincronizar após importação.');
+      }
+
       const routes = await listRoutes({ forceRefresh: true });
       const routeIdsFromResponse = [
         ...(payload.route_ids ?? []),
@@ -109,17 +118,22 @@ export function ImportRouteScreen({ navigation }: Props) {
         .filter((value) => Number.isFinite(value) && value > 0)
         .map((value) => Math.trunc(value));
       const preferredRouteIds = [...new Set(routeIdsFromResponse)];
+      const routeCreatedAfterImport =
+        routes.find((route) => !routeIdsBeforeImport.has(route.id));
       const targetRoute =
         routes.find((route) => preferredRouteIds.includes(route.id)) ??
+        routeCreatedAfterImport ??
         routes[0];
 
       if (!targetRoute) {
-        Alert.alert('Rota importada com sucesso');
-        navigation.goBack();
+        throw new Error('Rota importada, mas nenhuma rota foi retornada pelo backend.');
         return;
       }
 
       const waypoints = await listRouteWaypoints(targetRoute.id, { forceRefresh: true });
+      if (waypoints.length === 0) {
+        throw new Error('A rota importada não possui waypoints disponíveis para exibição no mapa.');
+      }
 
       Alert.alert(
         'Rota importada com sucesso',

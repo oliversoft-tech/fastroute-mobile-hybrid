@@ -1,7 +1,6 @@
 import { ImportResult, RouteDetail } from '../api/types';
 import { importOrders as importOrdersRemote } from '../api/ordersRemoteApi';
 import { getAuthAccessToken } from '../api/httpClient';
-import { API_BASE_URL } from '../config/api';
 import {
   deleteRoute as deleteRouteRemote,
   finishRoute as finishRouteRemote,
@@ -51,11 +50,6 @@ type SyncFinishedListener = (result: SyncResult) => void;
 let syncInFlight: Promise<SyncResult> | null = null;
 const syncFinishedListeners = new Set<SyncFinishedListener>();
 const SYNC_TIMEOUT_MS = 45000;
-
-function isLocalOnlyMode() {
-  const normalized = API_BASE_URL.trim().toLowerCase();
-  return normalized.includes('localhost') || normalized.includes('127.0.0.1');
-}
 
 function notifySyncFinished(result: SyncResult) {
   syncFinishedListeners.forEach((listener) => {
@@ -204,21 +198,6 @@ async function pullRemoteSnapshot() {
 }
 
 async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
-  if (isLocalOnlyMode()) {
-    const [pendingOperations, localRoutes] = await Promise.all([
-      countPendingSyncOperations(),
-      listLocalRoutes()
-    ]);
-    await setLastSyncAt(new Date().toISOString());
-    return {
-      ok: true,
-      trigger,
-      pulledRoutes: localRoutes.length,
-      processedOperations: 0,
-      pendingOperations
-    };
-  }
-
   if (!getAuthAccessToken()) {
     const pendingOperations = await countPendingSyncOperations();
     return {

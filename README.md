@@ -19,7 +19,7 @@ App React Native com Expo, inspirado nas telas do prototipo, para operacao de ro
 
 Base URL configurada:
 
-`http://localhost:5678/webhook`
+`https://webhook.oliversoft.tech/webhook/`
 
 Voce pode sobrescrever por variavel de ambiente:
 
@@ -55,3 +55,11 @@ Refresh de token via Supabase SDK:
 
 - O contrato usado pelo app segue a collection Postman `FastRouteApp.postman_collection.json`.
 - O app não sincroniza apenas por haver internet; sincroniza somente de forma manual ou no horário diário configurado.
+
+## Testes de UI (Maestro)
+
+- Fluxos ficam em `.maestro/flows/`.
+- Runner usado no CI: `scripts/ci/run-maestro-tests.sh`.
+- Execução local:
+  - `npm run test:functional:android`
+  - `npm run test:functional:ios`

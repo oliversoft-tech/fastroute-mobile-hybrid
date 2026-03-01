@@ -2,7 +2,7 @@ const runtimeProcess = (globalThis as { process?: { env?: Record<string, string 
   .process;
 
 export const API_BASE_URL =
-  runtimeProcess?.env?.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:5678/webhook';
+  runtimeProcess?.env?.EXPO_PUBLIC_API_BASE_URL ?? 'https://webhook.oliversoft.tech/webhook/';
 
 export const SUPABASE_URL =
   runtimeProcess?.env?.EXPO_PUBLIC_SUPABASE_URL ?? 'https://mbtwevtytgnlztaccygy.supabase.co';

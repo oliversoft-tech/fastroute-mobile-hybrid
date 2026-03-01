@@ -1,0 +1,22 @@
+appId: com.oliverbill.fastroutemobile
+---
+- runFlow: ../_bootstrap-e2e.yaml
+
+- assertVisible: "(?s).*Rota #9001.*CRIADA.*"
+- tapOn: "(?s).*Rota #9001.*CRIADA.*"
+
+- assertVisible: "Paradas"
+- assertVisible: "Ver no mapa"
+- assertVisible: "Iniciar"
+- assertVisible: "(?s).*Entrega E2E A1.*"
+
+- tapOn: "Ver no mapa"
+- assertVisible: "Mapa da Rota"
+- assertVisible: "Rota #9001"
+- assertVisible: "Restaurar"
+- assertVisible: "Confirmar ordem"
+
+- tapOn: "Confirmar ordem"
+- extendedWaitUntil:
+    visible: "Paradas"
+    timeout: 30000

@@ -1,0 +1,13 @@
+appId: com.oliverbill.fastroutemobile
+---
+- runFlow: ../_bootstrap-e2e.yaml
+
+- tapOn: "Config"
+
+- assertVisible: "Configurações"
+- assertVisible: "Sincronização"
+- assertVisible: "Salvar horário"
+- assertVisible: "Sincronizar agora"
+
+- tapOn: "Minhas Rotas"
+- assertVisible: "(?s).*Rota #9001.*CRIADA.*"

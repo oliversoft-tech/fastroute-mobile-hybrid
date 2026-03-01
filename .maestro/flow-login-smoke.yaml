@@ -1,0 +1,7 @@
+appId: com.oliverbill.fastroutemobile
+---
+- launchApp
+- assertVisible: "FastRoute"
+- assertVisible: "E-mail"
+- assertVisible: "Senha"
+- assertVisible: "Entrar no Sistema"

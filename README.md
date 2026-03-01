@@ -57,6 +57,8 @@ Refresh de token via Supabase SDK:
 
 - Fluxos ficam em `.maestro/flows/`.
 - Runner usado no CI: `scripts/ci/run-maestro-tests.sh`.
+- Em modo E2E (`EXPO_PUBLIC_E2E_BYPASS_LOGIN=1`), o app cria seed local automatico para rotas/waypoints de teste.
+- Para desativar esse seed em execucao local: `EXPO_PUBLIC_E2E_SEED_DATA=0`.
 - Execução local:
   - `npm run test:functional:android`
   - `npm run test:functional:ios`

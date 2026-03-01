@@ -1,0 +1,15 @@
+appId: com.oliverbill.fastroutemobile
+---
+- runFlow: ../_bootstrap-e2e.yaml
+
+- assertVisible: "Criar Rota"
+- assertVisible: "Config"
+- assertVisible: "Sair"
+- assertVisible: "(?s).*Rota #9001.*CRIADA.*"
+- assertVisible: "(?s).*Rota #9002.*EM ANDAMENTO.*"
+
+- tapOn: "Sair"
+- assertVisible: "FastRoute"
+- assertVisible: "E-mail"
+- assertVisible: "Senha"
+- assertVisible: "Entrar no Sistema"

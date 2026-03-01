@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode
 } from 'react';
+import { Linking } from 'react-native';
 import { loginRequest } from '../api/authApi';
 import {
   setAuthSessionTokens,
@@ -20,13 +21,28 @@ import { resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/authStorage';
 import { invalidateRouteQueryCache } from '../state/routesQueryCache';
 import { maybeRunInitialAutoSync, syncNow } from '../offline/syncEngine';
+import { forceE2ESeedData } from '../e2e/seedData';
 
 const runtimeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } })
   .process;
-const E2E_BYPASS_LOGIN = ['1', 'true', 'yes', 'on'].includes(
-  String(runtimeProcess?.env?.EXPO_PUBLIC_E2E_BYPASS_LOGIN ?? '')
+
+function parseBooleanEnv(value: string | undefined, fallback: boolean) {
+  const normalized = String(value ?? '')
     .trim()
-    .toLowerCase()
+    .toLowerCase();
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+const E2E_BYPASS_LOGIN = parseBooleanEnv(
+  runtimeProcess?.env?.EXPO_PUBLIC_E2E_BYPASS_LOGIN,
+  false
 );
 
 interface AuthState {
@@ -48,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isReady, setIsReady] = useState(false);
   const userEmailRef = useRef<string | null>(null);
   const userIdRef = useRef<string | null>(null);
+  const e2eBootstrapInFlightRef = useRef(false);
 
   useEffect(() => {
     userEmailRef.current = userEmail;
@@ -57,14 +74,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     userIdRef.current = userId;
   }, [userId]);
 
+  const applyE2EBootstrap = useCallback(async () => {
+    if (e2eBootstrapInFlightRef.current) {
+      return;
+    }
+
+    e2eBootstrapInFlightRef.current = true;
+    try {
+      setUserEmail('e2e@fastroute.test');
+      setUserId('e2e-driver');
+      setAuthTokenState('e2e-token');
+      setRefreshTokenState(null);
+      setAuthSessionTokens('e2e-token', null);
+      await forceE2ESeedData();
+    } finally {
+      e2eBootstrapInFlightRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     async function restoreSession() {
       if (E2E_BYPASS_LOGIN) {
-        setUserEmail('e2e@fastroute.test');
-        setUserId('e2e-driver');
-        setAuthTokenState('e2e-token');
-        setRefreshTokenState(null);
-        setAuthSessionTokens('e2e-token', null);
+        await applyE2EBootstrap();
         setIsReady(true);
         return;
       }
@@ -105,7 +136,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     restoreSession();
-  }, []);
+  }, [applyE2EBootstrap]);
+
+  useEffect(() => {
+    const onUrl = ({ url }: { url: string }) => {
+      if (!url) {
+        return;
+      }
+
+      const normalized = url.toLowerCase();
+      if (!normalized.includes('e2e/bootstrap')) {
+        return;
+      }
+
+      void applyE2EBootstrap();
+    };
+
+    const subscription = Linking.addEventListener('url', onUrl);
+    void Linking.getInitialURL().then((url) => {
+      if (url) {
+        onUrl({ url });
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [applyE2EBootstrap]);
 
   const login = useCallback(async (email: string, password: string) => {
     const tokens = await loginRequest(email, password);

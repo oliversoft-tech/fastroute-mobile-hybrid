@@ -15,7 +15,11 @@
     "typecheck": "tsc --noEmit",
     "eas:build:preview": "eas build -p android --profile preview",
     "eas:update:preview": "eas update --channel preview",
-    "eas:update:production": "eas update --channel production"
+    "eas:update:production": "eas update --channel production",
+    "test:unit": "node --import tsx --test test/unit/**/*.test.ts",
+    "test:functional:android": "bash ./scripts/ci/run-maestro-tests.sh android",
+    "test:functional:ios": "bash ./scripts/ci/run-maestro-tests.sh ios",
+    "test:regression": "npm run test:unit"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
@@ -45,9 +49,11 @@
     "react-native-webview": "^13.12.5"
   },
   "devDependencies": {
+    "@types/node": "^22.19.13",
     "@types/react": "~18.3.12",
     "eas-cli": "^18.0.3",
     "playwright": "^1.58.2",
+    "tsx": "^4.21.0",
     "typescript": "~5.3.3"
   }
 }

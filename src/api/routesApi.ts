@@ -18,6 +18,7 @@ import {
   updateLocalWaypointStatus,
   upsertLocalRoute
 } from '../offline/localDb';
+import { ensureE2ESeedData } from '../e2e/seedData';
 
 interface QueryCacheOptions {
   forceRefresh?: boolean;
@@ -166,10 +167,12 @@ async function persistWaypointPhotoBase64(
 }
 
 export async function listRoutes(_options?: QueryCacheOptions) {
+  await ensureE2ESeedData();
   return listLocalRoutes();
 }
 
 export async function getRouteDetails(routeId: number, _options?: QueryCacheOptions) {
+  await ensureE2ESeedData();
   const route = await getLocalRoute(routeId);
   if (!route) {
     throw new Error(`Rota #${routeId} não encontrada.`);
@@ -183,6 +186,7 @@ export async function getRouteDetails(routeId: number, _options?: QueryCacheOpti
 }
 
 export async function listRouteWaypoints(routeId: number, _options?: QueryCacheOptions) {
+  await ensureE2ESeedData();
   return listLocalWaypoints(routeId);
 }
 

@@ -8,6 +8,15 @@ CONFIGURATION="${IOS_CONFIGURATION:-Release}"
 BUNDLE_ID="${IOS_BUNDLE_ID:-com.oliverbill.fastroutemobile}"
 WORKSPACE_PATH="ios/FastRoute.xcworkspace"
 
+first_match() {
+  local pattern="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -m1 "$pattern" || true
+    return
+  fi
+  grep -E -m1 "$pattern" || true
+}
+
 extract_udid_from_line() {
   local line="$1"
   echo "$line" | sed -E 's/.*\(([A-F0-9-]+)\)[[:space:]]*$/\1/'
@@ -16,14 +25,14 @@ extract_udid_from_line() {
 find_connected_iphone_udid() {
   local preferred_name="${IOS_DEVICE_NAME:-iPhone do Bill}"
   local preferred_line
-  preferred_line="$(xcrun xctrace list devices | rg -m1 "^${preferred_name} \\(" || true)"
+  preferred_line="$(xcrun xctrace list devices | first_match "^${preferred_name}[[:space:]]*\\(")"
   if [ -n "$preferred_line" ]; then
     extract_udid_from_line "$preferred_line"
     return 0
   fi
 
   local any_iphone_line
-  any_iphone_line="$(xcrun xctrace list devices | rg -m1 '^iPhone.*\([0-9]+\.[0-9]+(\.[0-9]+)?\) \([A-F0-9-]+\)$' || true)"
+  any_iphone_line="$(xcrun xctrace list devices | first_match '^iPhone.*\([0-9]+\.[0-9]+(\.[0-9]+)?\)[[:space:]]+\([A-F0-9-]+\)$')"
   if [ -n "$any_iphone_line" ]; then
     extract_udid_from_line "$any_iphone_line"
   fi

@@ -1,0 +1,9 @@
+appId: com.oliverbill.fastroutemobile
+---
+- launchApp:
+    clearState: true
+- openLink: "fastroute://e2e/bootstrap"
+- tapOn:
+    text: "Open"
+    optional: true
+- assertVisible: "Minhas Rotas"

@@ -1,0 +1,56 @@
+name: Publish Mobile Stores
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Plataforma de publicação
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - android
+          - ios
+      profile:
+        description: Perfil EAS Submit
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+
+permissions:
+  contents: read
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli
+
+      - name: Submit Android
+        if: inputs.platform == 'all' || inputs.platform == 'android'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas submit --platform android --profile "${{ inputs.profile }}" --latest --non-interactive
+
+      - name: Submit iOS
+        if: inputs.platform == 'all' || inputs.platform == 'ios'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas submit --platform ios --profile "${{ inputs.profile }}" --latest --non-interactive

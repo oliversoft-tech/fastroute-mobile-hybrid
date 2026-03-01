@@ -1,0 +1,20 @@
+appId: com.oliverbill.fastroutemobile
+---
+- runFlow: ../_bootstrap-e2e.yaml
+
+- assertVisible: "(?s).*Rota #9002.*EM ANDAMENTO.*"
+- tapOn: "(?s).*Rota #9002.*EM ANDAMENTO.*"
+
+- assertVisible: "Paradas"
+- tapOn: "(?s).*Entrega E2E B2.*"
+
+- assertVisible: "Entrega #2"
+- assertVisible: "Marcar como ENTREGUE"
+- tapOn: "Marcar como ENTREGUE"
+
+- assertVisible: "Confirmação"
+- assertVisible: "(?s).*Deseja prosseguir.*assim.*"
+- tapOn: "Prosseguir"
+
+- assertVisible: "Paradas"
+- assertVisible: "(?s).*Entrega E2E B2.*ENTREGUE.*"

@@ -1,0 +1,22 @@
+appId: com.oliverbill.fastroutemobile
+---
+- runFlow: ../_bootstrap-e2e.yaml
+
+- assertVisible: "(?s).*Rota #9002.*EM ANDAMENTO.*"
+- tapOn: "(?s).*Rota #9002.*EM ANDAMENTO.*"
+
+- assertVisible: "Paradas"
+- tapOn: "(?s).*Entrega E2E B1.*"
+
+- assertVisible: "Entrega #1"
+- assertVisible: "Marcar FALHA"
+- tapOn: "Marcar FALHA"
+
+- assertVisible: "Registrar Falha"
+- tapOn: "Observações da falha (obs_falha)"
+- inputText: "E2E: cliente ausente"
+- tapOn: "MORADOR AUSENTE"
+- tapOn: "Confirmar"
+
+- assertVisible: "Paradas"
+- assertVisible: "(?s).*Entrega E2E B1.*FALHA.*"

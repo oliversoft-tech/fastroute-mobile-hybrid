@@ -7,3 +7,6 @@ npm-debug.*
 .env
 android
 dist
+.maestro/debug
+.maestro/results
+*.swp

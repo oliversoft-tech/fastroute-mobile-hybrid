@@ -9,7 +9,7 @@ appId: com.oliverbill.fastroutemobile
 - assertVisible: "Importar arquivo de rota"
 - tapOn: "Abrir arquivos locais"
 
-- assertVisible: "Documents.csv"
+- assertVisible: "anapaula.csv"
 - tapOn: "Documents.csv"
 
 - assertVisible: "Documents.csv"

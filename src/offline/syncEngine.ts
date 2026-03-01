@@ -29,6 +29,10 @@ export interface SyncResult {
   error?: string;
 }
 
+interface SyncOptions {
+  fullPull?: boolean;
+}
+
 type SyncFinishedListener = (result: SyncResult) => void;
 
 interface ApiRecord {
@@ -352,9 +356,9 @@ async function processPendingQueue() {
   }
 }
 
-async function pullRemoteSnapshot() {
+async function pullRemoteSnapshot(options?: SyncOptions) {
   const lastSyncAt = await getLastSyncAt();
-  const payload = lastSyncAt ? { last_sync_at: lastSyncAt } : {};
+  const payload = options?.fullPull ? {} : lastSyncAt ? { last_sync_at: lastSyncAt } : {};
 
   const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/pull'), payload);
 
@@ -370,7 +374,7 @@ async function pullRemoteSnapshot() {
   return routes.length;
 }
 
-async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
+async function runSync(trigger: SyncTrigger, options?: SyncOptions): Promise<SyncResult> {
   if (!getAuthAccessToken()) {
     const pendingOperations = await countPendingSyncOperations();
     return {
@@ -390,7 +394,7 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
 
   let pulledRoutes = 0;
   try {
-    pulledRoutes = await pullRemoteSnapshot();
+    pulledRoutes = await pullRemoteSnapshot(options);
   } catch (error) {
     const pendingOperations = await countPendingSyncOperations();
     return {
@@ -421,7 +425,7 @@ async function runSync(trigger: SyncTrigger): Promise<SyncResult> {
   };
 }
 
-async function runSyncWithTimeout(trigger: SyncTrigger): Promise<SyncResult> {
+async function runSyncWithTimeout(trigger: SyncTrigger, options?: SyncOptions): Promise<SyncResult> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutResultPromise = new Promise<SyncResult>((resolve) => {
     timeoutId = setTimeout(() => {
@@ -439,16 +443,16 @@ async function runSyncWithTimeout(trigger: SyncTrigger): Promise<SyncResult> {
     }, SYNC_TIMEOUT_MS);
   });
 
-  const result = await Promise.race([runSync(trigger), timeoutResultPromise]);
+  const result = await Promise.race([runSync(trigger, options), timeoutResultPromise]);
   if (timeoutId) {
     clearTimeout(timeoutId);
   }
   return result;
 }
 
-export async function syncNow(trigger: SyncTrigger = 'manual'): Promise<SyncResult> {
+export async function syncNow(trigger: SyncTrigger = 'manual', options?: SyncOptions): Promise<SyncResult> {
   if (!syncInFlight) {
-    syncInFlight = runSyncWithTimeout(trigger)
+    syncInFlight = runSyncWithTimeout(trigger, options)
       .then((result) => {
         notifySyncFinished(result);
         return result;

@@ -21,6 +21,14 @@ import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/aut
 import { invalidateRouteQueryCache } from '../state/routesQueryCache';
 import { maybeRunInitialAutoSync, syncNow } from '../offline/syncEngine';
 
+const runtimeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+  .process;
+const E2E_BYPASS_LOGIN = ['1', 'true', 'yes', 'on'].includes(
+  String(runtimeProcess?.env?.EXPO_PUBLIC_E2E_BYPASS_LOGIN ?? '')
+    .trim()
+    .toLowerCase()
+);
+
 interface AuthState {
   userEmail: string | null;
   userId: string | null;
@@ -51,6 +59,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     async function restoreSession() {
+      if (E2E_BYPASS_LOGIN) {
+        setUserEmail('e2e@fastroute.test');
+        setUserId('e2e-driver');
+        setAuthTokenState('e2e-token');
+        setRefreshTokenState(null);
+        setAuthSessionTokens('e2e-token', null);
+        setIsReady(true);
+        return;
+      }
+
       try {
         const session = await loadAuthSession();
         if (!session) {
@@ -119,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      await syncNow('manual');
+      await syncNow('manual', { fullPull: true });
     } catch (syncError) {
       console.warn('[Auth] Falha ao sincronizar rotas após login:', syncError);
     }
@@ -170,7 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [logout]);
 
   useEffect(() => {
-    if (!isReady || !authToken) {
+    if (!isReady || !authToken || E2E_BYPASS_LOGIN) {
       return;
     }
     void maybeRunInitialAutoSync();

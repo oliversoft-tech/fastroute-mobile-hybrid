@@ -30,7 +30,7 @@ jobs:
         with:
           repository: ${{ format('{0}/{1}', github.repository_owner, env.DOMAIN_REPO) }}
           ref: ${{ github.repository == format('{0}/{1}', github.repository_owner, env.DOMAIN_REPO) && github.sha || 'main' }}
-          token: ${{ secrets.CROSS_REPO_PAT != '' && secrets.CROSS_REPO_PAT || github.token }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
           path: domain
 
       - name: Checkout API
@@ -38,7 +38,7 @@ jobs:
         with:
           repository: ${{ format('{0}/{1}', github.repository_owner, env.API_REPO) }}
           ref: ${{ github.repository == format('{0}/{1}', github.repository_owner, env.API_REPO) && github.sha || 'main' }}
-          token: ${{ secrets.CROSS_REPO_PAT != '' && secrets.CROSS_REPO_PAT || github.token }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
           path: api
 
       - name: Checkout mobile
@@ -46,7 +46,7 @@ jobs:
         with:
           repository: ${{ format('{0}/{1}', github.repository_owner, env.MOBILE_REPO) }}
           ref: ${{ github.repository == format('{0}/{1}', github.repository_owner, env.MOBILE_REPO) && github.sha || 'main' }}
-          token: ${{ secrets.CROSS_REPO_PAT != '' && secrets.CROSS_REPO_PAT || github.token }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
           path: mobile
 
       - name: Setup Node
@@ -93,7 +93,7 @@ jobs:
         with:
           repository: ${{ format('{0}/{1}', github.repository_owner, env.DOMAIN_REPO) }}
           ref: ${{ github.repository == format('{0}/{1}', github.repository_owner, env.DOMAIN_REPO) && github.sha || 'main' }}
-          token: ${{ secrets.CROSS_REPO_PAT != '' && secrets.CROSS_REPO_PAT || github.token }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
           path: domain
 
       - name: Checkout mobile
@@ -101,7 +101,7 @@ jobs:
         with:
           repository: ${{ format('{0}/{1}', github.repository_owner, env.MOBILE_REPO) }}
           ref: ${{ github.repository == format('{0}/{1}', github.repository_owner, env.MOBILE_REPO) && github.sha || 'main' }}
-          token: ${{ secrets.CROSS_REPO_PAT != '' && secrets.CROSS_REPO_PAT || github.token }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
           path: mobile
 
       - name: Setup Node
@@ -166,7 +166,7 @@ jobs:
         with:
           repository: ${{ format('{0}/{1}', github.repository_owner, env.DOMAIN_REPO) }}
           ref: ${{ github.repository == format('{0}/{1}', github.repository_owner, env.DOMAIN_REPO) && github.sha || 'main' }}
-          token: ${{ secrets.CROSS_REPO_PAT != '' && secrets.CROSS_REPO_PAT || github.token }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
           path: domain
 
       - name: Checkout mobile
@@ -174,7 +174,7 @@ jobs:
         with:
           repository: ${{ format('{0}/{1}', github.repository_owner, env.MOBILE_REPO) }}
           ref: ${{ github.repository == format('{0}/{1}', github.repository_owner, env.MOBILE_REPO) && github.sha || 'main' }}
-          token: ${{ secrets.CROSS_REPO_PAT != '' && secrets.CROSS_REPO_PAT || github.token }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
           path: mobile
 
       - name: Setup Node

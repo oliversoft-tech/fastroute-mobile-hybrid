@@ -55,14 +55,24 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const [saving, setSaving] = useState(false);
   const [startLocked, setStartLocked] = useState(() => startedRouteIdsLock.has(routeId));
   const startRouteInFlightRef = useRef(false);
+  const loadRequestRef = useRef(0);
 
   const loadRouteDetails = useCallback(async (options?: { forceRefresh?: boolean }) => {
+    const requestId = ++loadRequestRef.current;
+    if (!options?.forceRefresh) {
+      setLoading(true);
+    }
+
     try {
       const cachedOrder = getCachedRouteWaypointOrder(routeId);
       const [detailResult, waypointsResult] = await Promise.allSettled([
         getRouteDetails(routeId, { forceRefresh: options?.forceRefresh }),
         listRouteWaypoints(routeId, { forceRefresh: options?.forceRefresh })
       ]);
+
+      if (requestId !== loadRequestRef.current) {
+        return;
+      }
 
       if (detailResult.status !== 'fulfilled') {
         throw detailResult.reason;
@@ -80,10 +90,16 @@ export function RouteDetailScreen({ route, navigation }: Props) {
         waypoints: orderedWaypoints
       });
     } catch (error) {
+      if (requestId !== loadRequestRef.current) {
+        return;
+      }
+      setRouteDetail(null);
       Alert.alert('Erro ao carregar rota', getApiError(error));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (requestId === loadRequestRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [routeId, refreshAt]);
 
@@ -94,6 +110,9 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   );
 
   useEffect(() => {
+    setRouteDetail(null);
+    setLoading(true);
+    setRefreshing(false);
     setStartLocked(startedRouteIdsLock.has(routeId));
   }, [routeId]);
 

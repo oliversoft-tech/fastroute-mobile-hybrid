@@ -471,7 +471,8 @@ export function MapScreen({ route, navigation }: Props) {
   }, [badge]);
 
   const webMapHtml = useMemo(() => buildLeafletMapHtml(initialPoints), [initialPoints]);
-  const canReorderRoute = routeStatus === 'CRIADA';
+  const forceEnableReorderActions = route.params.forceEnableReorderActions === true;
+  const canReorderRoute = forceEnableReorderActions || routeStatus === 'CRIADA';
   const reorderLockedByRouteStatus = !canReorderRoute;
 
   const onConfirmOrder = async () => {

@@ -145,7 +145,8 @@ export function ImportRouteScreen({ navigation }: Props) {
               navigation.replace('Map', {
                 routeId: targetRoute.id,
                 waypoints,
-                routeStatus: targetRoute.status
+                routeStatus: targetRoute.status,
+                forceEnableReorderActions: true
               })
           }
         ]

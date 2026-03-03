@@ -8,5 +8,10 @@ export type RootStackParamList = {
   FileBrowser: undefined;
   RouteDetail: { routeId: number; refreshAt?: number };
   Delivery: { routeId: number; waypoint: Waypoint };
-  Map: { routeId: number; waypoints: Waypoint[]; routeStatus?: RouteStatus };
+  Map: {
+    routeId: number;
+    waypoints: Waypoint[];
+    routeStatus?: RouteStatus;
+    forceEnableReorderActions?: boolean;
+  };
 };

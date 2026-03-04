@@ -13,10 +13,12 @@ import {
   getLastDailySyncDate,
   getLastSyncAt,
   isInitialSyncDone,
+  listLocalWaypoints,
   listLocalRoutes,
   listPendingSyncOperations,
   markSyncOperationDone,
   markSyncOperationFailed,
+  mergeRouteSnapshot,
   saveRouteSnapshot,
   setInitialSyncDone,
   setLastDailySyncDate,
@@ -51,6 +53,11 @@ interface ProcessPendingQueueResult {
   failed: boolean;
   failedMessage: string | null;
   pushedItems: SyncQueueItem[];
+}
+
+interface PushSnapshotPayload {
+  routes: RouteDetail[];
+  deletedRouteIds: number[];
 }
 
 let syncInFlight: Promise<SyncResult> | null = null;
@@ -504,9 +511,13 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
     retry_count: item.retryCount
   }));
 
+  const snapshotPayload = await buildPushSnapshotPayload(pending);
+
   try {
     const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/push'), {
-      changes
+      changes,
+      routes_snapshot: snapshotPayload.routes,
+      deleted_route_ids: snapshotPayload.deletedRouteIds
     });
 
     if (!isPayloadOk(data)) {
@@ -517,9 +528,66 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
     return { processed: pending.length, failed: false, failedMessage: null as string | null, pushedItems: pending };
   } catch (error) {
     const message = getApiError(error);
-    await markSyncOperationFailed(pending[0].id, message);
+    await Promise.all(pending.map((item) => markSyncOperationFailed(item.id, message)));
     return { processed: 0, failed: true, failedMessage: message, pushedItems: [] };
   }
+}
+
+async function buildPushSnapshotPayload(pending: SyncQueueItem[]): Promise<PushSnapshotPayload> {
+  const routeIds = new Set<number>();
+  const deletedRouteIds = new Set<number>();
+
+  for (const item of pending) {
+    const payload = item.payload ?? {};
+    const directRouteId = toQueueRouteId(payload);
+    if (directRouteId) {
+      routeIds.add(directRouteId);
+    }
+
+    const routeIdsPayload = Array.isArray(payload.route_ids) ? payload.route_ids : [];
+    for (const routeIdRaw of routeIdsPayload) {
+      const routeId = Math.trunc(Number(routeIdRaw));
+      if (Number.isFinite(routeId) && routeId > 0) {
+        routeIds.add(routeId);
+      }
+    }
+
+    if (item.opType === 'UPDATE_WAYPOINT_STATUS' && !directRouteId) {
+      const waypointId = toQueueWaypointId(payload);
+      if (!waypointId) {
+        continue;
+      }
+      const waypoint = await getLocalWaypoint(waypointId);
+      if (waypoint?.route_id) {
+        routeIds.add(Math.trunc(Number(waypoint.route_id)));
+      }
+    }
+
+    if (item.opType === 'DELETE_ROUTE' && directRouteId) {
+      deletedRouteIds.add(directRouteId);
+      routeIds.delete(directRouteId);
+    }
+  }
+
+  const routes: RouteDetail[] = [];
+  for (const routeId of routeIds) {
+    const route = await getLocalRoute(routeId);
+    if (!route) {
+      continue;
+    }
+
+    const waypoints = await listLocalWaypoints(routeId);
+    routes.push({
+      ...route,
+      waypoints_count: waypoints.length,
+      waypoints
+    });
+  }
+
+  return {
+    routes,
+    deletedRouteIds: Array.from(deletedRouteIds).sort((a, b) => a - b)
+  };
 }
 
 async function reconcileRecentlyPushedOperations(operations: SyncQueueItem[]) {
@@ -637,7 +705,11 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
 
   if (routes.length > 0) {
     const enrichedRoutes = await enrichRoutesWithDetailedAddress(routes);
-    await saveRouteSnapshot(enrichedRoutes);
+    if (options?.fullPull) {
+      await saveRouteSnapshot(enrichedRoutes);
+    } else {
+      await mergeRouteSnapshot(enrichedRoutes);
+    }
   }
 
   return routes.length;
@@ -667,9 +739,17 @@ async function runSync(trigger: SyncTrigger, options?: SyncOptions): Promise<Syn
   }
 
   const queueResult = await processPendingQueue();
-  const queueWarning = queueResult.failed
-    ? queueResult.failedMessage ?? 'Falha ao sincronizar dados pendentes.'
-    : undefined;
+  if (queueResult.failed) {
+    const pendingOperations = await countPendingSyncOperations();
+    return {
+      ok: false,
+      trigger,
+      pulledRoutes: 0,
+      processedOperations: queueResult.processed,
+      pendingOperations,
+      error: queueResult.failedMessage ?? 'Falha ao sincronizar dados pendentes.'
+    };
+  }
 
   let pulledRoutes = 0;
   try {
@@ -700,8 +780,7 @@ async function runSync(trigger: SyncTrigger, options?: SyncOptions): Promise<Syn
     trigger,
     pulledRoutes,
     processedOperations: queueResult.processed,
-    pendingOperations,
-    error: queueWarning
+    pendingOperations
   };
 }
 

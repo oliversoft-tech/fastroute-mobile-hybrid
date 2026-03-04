@@ -234,6 +234,68 @@ export async function saveRouteSnapshot(routes: RouteDetail[]) {
   });
 }
 
+export async function mergeRouteSnapshot(routes: RouteDetail[]) {
+  const db = await getLocalDb();
+  const timestamp = new Date().toISOString();
+
+  await db.withTransactionAsync(async () => {
+    for (const route of routes) {
+      const routeWaypoints = route.waypoints ?? [];
+      const reportedCount = route.waypoints_count ?? routeWaypoints.length;
+
+      await db.runAsync(
+        `INSERT INTO routes (id, cluster_id, status, created_at, waypoints_count, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           cluster_id = excluded.cluster_id,
+           status = excluded.status,
+           created_at = excluded.created_at,
+           waypoints_count = CASE
+             WHEN COALESCE(routes.waypoints_count, 0) > excluded.waypoints_count THEN routes.waypoints_count
+             ELSE excluded.waypoints_count
+           END,
+           updated_at = excluded.updated_at`,
+        route.id,
+        route.cluster_id ?? 0,
+        route.status,
+        route.created_at ?? timestamp,
+        reportedCount,
+        timestamp
+      );
+
+      for (const waypoint of routeWaypoints) {
+        await db.runAsync(
+          `INSERT INTO waypoints (
+            id, route_id, address_id, user_id, seq_order, status, title, subtitle, latitude, longitude, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            route_id = excluded.route_id,
+            address_id = excluded.address_id,
+            user_id = excluded.user_id,
+            seq_order = excluded.seq_order,
+            status = excluded.status,
+            title = excluded.title,
+            subtitle = excluded.subtitle,
+            latitude = excluded.latitude,
+            longitude = excluded.longitude,
+            updated_at = excluded.updated_at`,
+          waypoint.id,
+          waypoint.route_id || route.id,
+          waypoint.address_id ?? null,
+          waypoint.user_id ?? null,
+          waypoint.seq_order ?? 0,
+          waypoint.status,
+          waypoint.title ?? null,
+          waypoint.subtitle ?? null,
+          waypoint.latitude ?? null,
+          waypoint.longitude ?? null,
+          timestamp
+        );
+      }
+    }
+  });
+}
+
 export async function listLocalRoutes(): Promise<RouteDetail[]> {
   const db = await getLocalDb();
   const rows = await db.getAllAsync<RouteRow>(

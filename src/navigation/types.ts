@@ -3,6 +3,7 @@ import { RouteStatus, Waypoint } from '../api/types';
 export type RootStackParamList = {
   Login: undefined;
   Routes: undefined;
+  ImportRoutes: { routeIds: number[] };
   Settings: undefined;
   ImportRoute: undefined;
   FileBrowser: undefined;

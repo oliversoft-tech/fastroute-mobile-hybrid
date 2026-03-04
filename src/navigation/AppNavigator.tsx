@@ -9,6 +9,7 @@ import { RouteDetailScreen } from '../screens/RouteDetailScreen';
 import { DeliveryScreen } from '../screens/DeliveryScreen';
 import { MapScreen } from '../screens/MapScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { ImportRoutesScreen } from '../screens/ImportRoutesScreen';
 import { colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 
@@ -48,6 +49,11 @@ export function AppNavigator() {
             name="ImportRoute"
             component={ImportRouteScreen}
             options={{ title: 'Importar Rota' }}
+          />
+          <Stack.Screen
+            name="ImportRoutes"
+            component={ImportRoutesScreen}
+            options={{ title: 'Rotas da Importação' }}
           />
           <Stack.Screen
             name="FileBrowser"

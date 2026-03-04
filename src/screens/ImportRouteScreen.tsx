@@ -112,10 +112,28 @@ export function ImportRouteScreen({ navigation }: Props) {
         .filter((value) => Number.isFinite(value) && value > 0)
         .map((value) => Math.trunc(value));
       const preferredRouteIds = [...new Set(routeIdsFromResponse)];
-      const routeCreatedAfterImport =
-        routes.find((route) => !routeIdsBeforeImport.has(route.id));
+      const createdRouteIdsAfterImport = routes
+        .filter((route) => !routeIdsBeforeImport.has(route.id))
+        .map((route) => route.id);
+      const importedRouteIds = [...new Set([...preferredRouteIds, ...createdRouteIdsAfterImport])];
+
+      if (importedRouteIds.length > 1) {
+        Alert.alert(
+          'Rota importada com sucesso',
+          'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('ImportRoutes', { routeIds: importedRouteIds })
+            }
+          ]
+        );
+        return;
+      }
+
+      const routeCreatedAfterImport = routes.find((route) => !routeIdsBeforeImport.has(route.id));
       const targetRoute =
-        routes.find((route) => preferredRouteIds.includes(route.id)) ??
+        routes.find((route) => importedRouteIds.includes(route.id)) ??
         routeCreatedAfterImport ??
         routes[0];
 

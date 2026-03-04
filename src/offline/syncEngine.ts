@@ -7,6 +7,7 @@ import {
   SyncQueueItem,
   countPendingSyncOperations,
   deleteLocalRoute,
+  getAppSetting,
   getDailySyncTime,
   getLocalRoute,
   getLocalWaypoint,
@@ -20,6 +21,7 @@ import {
   markSyncOperationFailed,
   mergeRouteSnapshot,
   saveRouteSnapshot,
+  setAppSetting,
   setInitialSyncDone,
   setLastDailySyncDate,
   setLastSyncAt,
@@ -55,9 +57,24 @@ interface ProcessPendingQueueResult {
   pushedItems: SyncQueueItem[];
 }
 
-interface PushSnapshotPayload {
-  routes: RouteDetail[];
-  deletedRouteIds: number[];
+type SyncMutationEntityType = 'route' | 'route_waypoint';
+
+interface SyncMutation {
+  queueItemId: number;
+  mutationId: string;
+  deviceId: string;
+  entityType: SyncMutationEntityType;
+  entityId: number;
+  op: string;
+  baseVersion: number;
+  payload: Record<string, unknown>;
+  allowNotFound?: boolean;
+}
+
+interface SyncPushMutationResult {
+  mutationId: string;
+  status: string;
+  serverVersion?: number;
 }
 
 let syncInFlight: Promise<SyncResult> | null = null;
@@ -78,6 +95,9 @@ const WAYPOINT_STATUS_RANK: Record<WaypointStatus, number> = {
   'FALHA TEMPO ADVERSO': 4,
   'FALHA MORADOR AUSENTE': 4
 };
+const SYNC_DEVICE_ID_KEY = 'sync_device_id';
+const ROUTE_VERSION_KEY_PREFIX = 'sync_version_route_';
+const WAYPOINT_VERSION_KEY_PREFIX = 'sync_version_waypoint_';
 
 function normalizeText(value: unknown) {
   return String(value ?? '')
@@ -249,7 +269,6 @@ function extractArray(value: unknown): unknown[] {
     record.records,
     record.snapshot,
     record.data,
-    record.changes,
     record.payload
   ];
 
@@ -348,7 +367,7 @@ function normalizeRoute(raw: unknown): RouteDetail | null {
   return {
     id,
     cluster_id: Math.trunc(Number(item.cluster_id ?? item.clusterId ?? 0)),
-    status: normalizeRouteStatus(item.status),
+    status: normalizeRouteStatus(item.status ?? item.route_status),
     created_at: pickString(item.created_at, item.createdAt) ?? new Date().toISOString(),
     waypoints_count: toPositiveInt(item.waypoints_count ?? item.waypointsCount, waypoints.length),
     waypoints
@@ -487,6 +506,310 @@ function parseSyncTime(value: string) {
   return { hh, mm };
 }
 
+function randomId() {
+  return `${Date.now()}-${Math.trunc(Math.random() * 1_000_000_000)}`;
+}
+
+function normalizePushStatus(value: unknown) {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return 'UNKNOWN';
+  }
+  return normalized;
+}
+
+function routeVersionKey(routeId: number) {
+  return `${ROUTE_VERSION_KEY_PREFIX}${routeId}`;
+}
+
+function waypointVersionKey(waypointId: number) {
+  return `${WAYPOINT_VERSION_KEY_PREFIX}${waypointId}`;
+}
+
+function getVersionKey(entityType: SyncMutationEntityType, entityId: number) {
+  return entityType === 'route' ? routeVersionKey(entityId) : waypointVersionKey(entityId);
+}
+
+async function getStoredEntityVersion(entityType: SyncMutationEntityType, entityId: number) {
+  const raw = await getAppSetting(getVersionKey(entityType, entityId));
+  const parsed = Math.trunc(Number(raw));
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    return parsed;
+  }
+  return 1;
+}
+
+async function setStoredEntityVersion(entityType: SyncMutationEntityType, entityId: number, version: number) {
+  const normalized = Math.trunc(Number(version));
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    return;
+  }
+  await setAppSetting(getVersionKey(entityType, entityId), String(normalized));
+}
+
+async function getSyncDeviceId() {
+  const existing = await getAppSetting(SYNC_DEVICE_ID_KEY);
+  if (existing && existing.trim().length > 0) {
+    return existing;
+  }
+
+  const generated = `device-${randomId()}`;
+  await setAppSetting(SYNC_DEVICE_ID_KEY, generated);
+  return generated;
+}
+
+function mapQueuedWaypointStatusToServer(value: unknown) {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return 'PENDENTE';
+  }
+  if (normalized.includes('ENTREGUE') || normalized.includes('CONCLUID')) {
+    return 'ENTREGUE';
+  }
+  if (normalized.includes('FALHA TEMPO ADVERSO')) {
+    return 'FALHA TEMPO ADVERSO';
+  }
+  if (normalized.includes('FALHA MORADOR AUSENTE')) {
+    return 'FALHA MORADOR AUSENTE';
+  }
+  if (normalized.includes('REORDEN')) {
+    return 'REORDENADO';
+  }
+  if (normalized.includes('EM_ROTA')) {
+    return 'EM_ROTA';
+  }
+  return 'PENDENTE';
+}
+
+function collectImportedRouteIds(pending: SyncQueueItem[]) {
+  const routeIds = new Set<number>();
+  pending.forEach((item) => {
+    if (item.opType !== 'IMPORT_ROUTE_FILE') {
+      return;
+    }
+    const payload = item.payload ?? {};
+    const list = Array.isArray(payload.route_ids) ? payload.route_ids : [];
+    list.forEach((entry) => {
+      const routeId = Math.trunc(Number(entry));
+      if (Number.isFinite(routeId) && routeId > 0) {
+        routeIds.add(routeId);
+      }
+    });
+  });
+  return routeIds;
+}
+
+async function buildMutationsForQueueItem(
+  item: SyncQueueItem,
+  deviceId: string,
+  importedRouteIds: Set<number>
+): Promise<SyncMutation[]> {
+  const payload = item.payload ?? {};
+  const mutations: SyncMutation[] = [];
+
+  const pushRouteMutation = async (
+    routeId: number,
+    op: string,
+    mutationPayload: Record<string, unknown>,
+    allowNotFound = false
+  ) => {
+    const baseVersion = await getStoredEntityVersion('route', routeId);
+    mutations.push({
+      queueItemId: item.id,
+      mutationId: `${item.id}-route-${routeId}-${randomId()}`,
+      deviceId,
+      entityType: 'route',
+      entityId: routeId,
+      op,
+      baseVersion,
+      payload: mutationPayload,
+      allowNotFound
+    });
+  };
+
+  const pushWaypointMutation = async (
+    waypointId: number,
+    op: string,
+    mutationPayload: Record<string, unknown>,
+    allowNotFound = false
+  ) => {
+    const baseVersion = await getStoredEntityVersion('route_waypoint', waypointId);
+    mutations.push({
+      queueItemId: item.id,
+      mutationId: `${item.id}-waypoint-${waypointId}-${randomId()}`,
+      deviceId,
+      entityType: 'route_waypoint',
+      entityId: waypointId,
+      op,
+      baseVersion,
+      payload: mutationPayload,
+      allowNotFound
+    });
+  };
+
+  switch (item.opType) {
+    case 'START_ROUTE': {
+      const routeId = toQueueRouteId(payload);
+      if (!routeId) {
+        return mutations;
+      }
+      await pushRouteMutation(
+        routeId,
+        'UPDATE',
+        { status: 'EM_ANDAMENTO' },
+        importedRouteIds.has(routeId)
+      );
+      return mutations;
+    }
+    case 'FINISH_ROUTE': {
+      const routeId = toQueueRouteId(payload);
+      if (!routeId) {
+        return mutations;
+      }
+      await pushRouteMutation(
+        routeId,
+        'UPDATE',
+        { status: 'CONCLUÍDA', ativa: false },
+        importedRouteIds.has(routeId)
+      );
+      return mutations;
+    }
+    case 'UPDATE_WAYPOINT_STATUS': {
+      const waypointId = toQueueWaypointId(payload);
+      if (!waypointId) {
+        return mutations;
+      }
+
+      const localWaypoint = await getLocalWaypoint(waypointId);
+      const routeId = localWaypoint?.route_id ? Math.trunc(Number(localWaypoint.route_id)) : null;
+      const allowNotFound = routeId ? importedRouteIds.has(routeId) : false;
+
+      await pushWaypointMutation(waypointId, 'UPDATE', { status: mapQueuedWaypointStatusToServer(payload.status) }, allowNotFound);
+      return mutations;
+    }
+    case 'REORDER_WAYPOINTS': {
+      const reordered = extractQueuedReorderedWaypoints(payload);
+      for (const entry of reordered) {
+        const localWaypoint = await getLocalWaypoint(entry.waypoint_id);
+        const routeId = localWaypoint?.route_id ? Math.trunc(Number(localWaypoint.route_id)) : null;
+        const allowNotFound = routeId ? importedRouteIds.has(routeId) : false;
+        await pushWaypointMutation(
+          entry.waypoint_id,
+          'UPDATE',
+          { seq_order: entry.seqorder, status: 'REORDENADO' },
+          allowNotFound
+        );
+      }
+      return mutations;
+    }
+    case 'DELETE_ROUTE': {
+      const routeId = toQueueRouteId(payload);
+      if (!routeId) {
+        return mutations;
+      }
+      await pushRouteMutation(
+        routeId,
+        'DELETE',
+        { status: 'CANCELADA', ativa: false },
+        importedRouteIds.has(routeId)
+      );
+      return mutations;
+    }
+    case 'IMPORT_ROUTE_FILE':
+    default:
+      return mutations;
+  }
+}
+
+function readPushMutationResult(payload: unknown): SyncPushMutationResult | null {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+
+  const mutationId = pickString(record.mutationId, record.mutation_id);
+  const status = pickString(record.status);
+  if (!mutationId || !status) {
+    return null;
+  }
+
+  return {
+    mutationId,
+    status,
+    serverVersion: Number.isFinite(Number(record.serverVersion))
+      ? Math.trunc(Number(record.serverVersion))
+      : Number.isFinite(Number(record.server_version))
+        ? Math.trunc(Number(record.server_version))
+        : undefined
+  };
+}
+
+async function pushSingleMutation(mutation: SyncMutation): Promise<{ ok: boolean; message?: string }> {
+  let currentBaseVersion = mutation.baseVersion;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/push'), {
+      mutations: [
+        {
+          deviceId: mutation.deviceId,
+          mutationId: mutation.mutationId,
+          entityType: mutation.entityType,
+          entityId: mutation.entityId,
+          op: mutation.op,
+          baseVersion: currentBaseVersion,
+          payload: mutation.payload
+        }
+      ]
+    });
+
+    if (!isPayloadOk(data)) {
+      return { ok: false, message: readErrorMessage(data, 'Falha ao sincronizar mutação pendente.') };
+    }
+
+    const root = asRecord(data);
+    const rawResults = Array.isArray(root?.results) ? root?.results : [];
+    const parsedResult = rawResults
+      .map((entry) => readPushMutationResult(entry))
+      .find((entry) => entry?.mutationId === mutation.mutationId);
+
+    if (!parsedResult) {
+      return { ok: false, message: 'Resposta inválida de sync/push: resultado da mutação não encontrado.' };
+    }
+
+    const normalizedStatus = normalizePushStatus(parsedResult.status);
+    if (normalizedStatus === 'APPLIED') {
+      await setStoredEntityVersion(mutation.entityType, mutation.entityId, currentBaseVersion + 1);
+      return { ok: true };
+    }
+
+    if (normalizedStatus === 'DUPLICATE') {
+      return { ok: true };
+    }
+
+    if (normalizedStatus === 'NOT_FOUND' && mutation.allowNotFound) {
+      return { ok: true };
+    }
+
+    if (
+      normalizedStatus === 'CONFLICT' &&
+      attempt === 0 &&
+      Number.isFinite(parsedResult.serverVersion) &&
+      (parsedResult.serverVersion ?? -1) >= 0
+    ) {
+      currentBaseVersion = Math.trunc(parsedResult.serverVersion ?? currentBaseVersion);
+      await setStoredEntityVersion(mutation.entityType, mutation.entityId, currentBaseVersion);
+      continue;
+    }
+
+    const serverVersionMessage = Number.isFinite(parsedResult.serverVersion)
+      ? ` (serverVersion=${parsedResult.serverVersion})`
+      : '';
+    return { ok: false, message: `Mutação ${mutation.mutationId} rejeitada com status ${normalizedStatus}${serverVersionMessage}.` };
+  }
+
+  return { ok: false, message: 'Falha desconhecida ao aplicar mutação pendente.' };
+}
+
 function notifySyncFinished(result: SyncResult) {
   syncFinishedListeners.forEach((listener) => {
     try {
@@ -503,90 +826,57 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
     return { processed: 0, failed: false, failedMessage: null as string | null, pushedItems: [] };
   }
 
-  const changes = pending.map((item: SyncQueueItem) => ({
-    id: item.id,
-    op_type: item.opType,
-    payload: item.payload,
-    created_at: item.createdAt,
-    retry_count: item.retryCount
-  }));
-
-  const snapshotPayload = await buildPushSnapshotPayload(pending);
-
-  try {
-    const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/push'), {
-      changes,
-      routes_snapshot: snapshotPayload.routes,
-      deleted_route_ids: snapshotPayload.deletedRouteIds
-    });
-
-    if (!isPayloadOk(data)) {
-      throw new Error(readErrorMessage(data, 'Falha ao sincronizar dados pendentes.'));
-    }
-
-    await Promise.all(pending.map((item) => markSyncOperationDone(item.id)));
-    return { processed: pending.length, failed: false, failedMessage: null as string | null, pushedItems: pending };
-  } catch (error) {
-    const message = getApiError(error);
-    await Promise.all(pending.map((item) => markSyncOperationFailed(item.id, message)));
-    return { processed: 0, failed: true, failedMessage: message, pushedItems: [] };
-  }
-}
-
-async function buildPushSnapshotPayload(pending: SyncQueueItem[]): Promise<PushSnapshotPayload> {
-  const routeIds = new Set<number>();
-  const deletedRouteIds = new Set<number>();
+  const deviceId = await getSyncDeviceId();
+  const importedRouteIds = collectImportedRouteIds(pending);
+  const pushedItems: SyncQueueItem[] = [];
+  let processed = 0;
+  let firstFailureMessage: string | null = null;
 
   for (const item of pending) {
-    const payload = item.payload ?? {};
-    const directRouteId = toQueueRouteId(payload);
-    if (directRouteId) {
-      routeIds.add(directRouteId);
-    }
+    try {
+      const mutations = await buildMutationsForQueueItem(item, deviceId, importedRouteIds);
 
-    const routeIdsPayload = Array.isArray(payload.route_ids) ? payload.route_ids : [];
-    for (const routeIdRaw of routeIdsPayload) {
-      const routeId = Math.trunc(Number(routeIdRaw));
-      if (Number.isFinite(routeId) && routeId > 0) {
-        routeIds.add(routeId);
-      }
-    }
-
-    if (item.opType === 'UPDATE_WAYPOINT_STATUS' && !directRouteId) {
-      const waypointId = toQueueWaypointId(payload);
-      if (!waypointId) {
+      if (item.opType === 'IMPORT_ROUTE_FILE' || mutations.length === 0) {
+        await markSyncOperationDone(item.id);
+        processed += 1;
+        pushedItems.push(item);
         continue;
       }
-      const waypoint = await getLocalWaypoint(waypointId);
-      if (waypoint?.route_id) {
-        routeIds.add(Math.trunc(Number(waypoint.route_id)));
+
+      let itemFailedMessage: string | null = null;
+      for (const mutation of mutations) {
+        const mutationResult = await pushSingleMutation(mutation);
+        if (!mutationResult.ok) {
+          itemFailedMessage = mutationResult.message ?? 'Falha ao sincronizar mutação pendente.';
+          break;
+        }
+      }
+
+      if (itemFailedMessage) {
+        await markSyncOperationFailed(item.id, itemFailedMessage);
+        if (!firstFailureMessage) {
+          firstFailureMessage = itemFailedMessage;
+        }
+        continue;
+      }
+
+      await markSyncOperationDone(item.id);
+      processed += 1;
+      pushedItems.push(item);
+    } catch (error) {
+      const message = getApiError(error);
+      await markSyncOperationFailed(item.id, message);
+      if (!firstFailureMessage) {
+        firstFailureMessage = message;
       }
     }
-
-    if (item.opType === 'DELETE_ROUTE' && directRouteId) {
-      deletedRouteIds.add(directRouteId);
-      routeIds.delete(directRouteId);
-    }
-  }
-
-  const routes: RouteDetail[] = [];
-  for (const routeId of routeIds) {
-    const route = await getLocalRoute(routeId);
-    if (!route) {
-      continue;
-    }
-
-    const waypoints = await listLocalWaypoints(routeId);
-    routes.push({
-      ...route,
-      waypoints_count: waypoints.length,
-      waypoints
-    });
   }
 
   return {
-    routes,
-    deletedRouteIds: Array.from(deletedRouteIds).sort((a, b) => a - b)
+    processed,
+    failed: firstFailureMessage !== null,
+    failedMessage: firstFailureMessage,
+    pushedItems
   };
 }
 
@@ -681,7 +971,7 @@ async function reconcileRecentlyPushedOperations(operations: SyncQueueItem[]) {
 
 async function pullRemoteSnapshot(options?: SyncOptions) {
   const lastSyncAt = await getLastSyncAt();
-  const payload = options?.fullPull ? {} : lastSyncAt ? { last_sync_at: lastSyncAt } : {};
+  const payload = options?.fullPull ? {} : lastSyncAt ? { sinceTs: lastSyncAt } : {};
 
   const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/pull'), payload);
 

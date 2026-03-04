@@ -20,7 +20,6 @@ import { ImportResult } from '../api/types';
 import { listRouteWaypoints, listRoutes } from '../api/routesApi';
 import { consumePendingImportFile } from '../state/importFileSelection';
 import { useCallback } from 'react';
-import { syncNow } from '../offline/syncEngine';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -104,11 +103,6 @@ export function ImportRouteScreen({ navigation }: Props) {
       const importedEntry = toRecentFileEntry(selectedFile);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
-      const syncResult = await syncNow('manual', { fullPull: true });
-      if (!syncResult.ok) {
-        throw new Error(syncResult.error ?? 'Falha ao sincronizar após importação.');
-      }
-
       const routes = await listRoutes({ forceRefresh: true });
       const routeIdsFromResponse = [
         ...(payload.route_ids ?? []),
@@ -126,13 +120,32 @@ export function ImportRouteScreen({ navigation }: Props) {
         routes[0];
 
       if (!targetRoute) {
-        throw new Error('Rota importada, mas nenhuma rota foi retornada pelo backend.');
+        Alert.alert(
+          'Rota importada com sucesso',
+          'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('Routes')
+            }
+          ]
+        );
         return;
       }
 
       const waypoints = await listRouteWaypoints(targetRoute.id, { forceRefresh: true });
       if (waypoints.length === 0) {
-        throw new Error('A rota importada não possui waypoints disponíveis para exibição no mapa.');
+        Alert.alert(
+          'Rota importada com sucesso',
+          'A rota foi criada e ficará disponível no detalhamento assim que os waypoints forem processados.',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('RouteDetail', { routeId: targetRoute.id, refreshAt: Date.now() })
+            }
+          ]
+        );
+        return;
       }
 
       Alert.alert(

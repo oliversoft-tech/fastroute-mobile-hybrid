@@ -12,6 +12,8 @@ export type RootStackParamList = {
   Map: {
     routeId: number;
     waypoints: Waypoint[];
+    routeIds?: number[];
+    importEpsMeters?: number;
     routeStatus?: RouteStatus;
     forceEnableReorderActions?: boolean;
   };

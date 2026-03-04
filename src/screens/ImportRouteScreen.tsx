@@ -20,6 +20,7 @@ import { ImportResult } from '../api/types';
 import { listRouteWaypoints, listRoutes } from '../api/routesApi';
 import { consumePendingImportFile } from '../state/importFileSelection';
 import { useCallback } from 'react';
+import { syncNow } from '../offline/syncEngine';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
 
@@ -99,6 +100,10 @@ export function ImportRouteScreen({ navigation }: Props) {
         epsMeters: Math.trunc(parsedEpsMeters),
         webFile: (selectedFile as DocumentPicker.DocumentPickerAsset & { file?: Blob }).file
       });
+      const syncResult = await syncNow('manual', { fullPull: true });
+      if (!syncResult.ok) {
+        throw new Error(syncResult.error ?? 'Falha ao sincronizar a importação.');
+      }
       setResult(payload);
       const importedEntry = toRecentFileEntry(selectedFile);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));

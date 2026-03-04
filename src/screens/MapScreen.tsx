@@ -1022,10 +1022,30 @@ export function MapScreen({ route, navigation }: Props) {
         ) : null}
       </View>
 
-      <View style={styles.routeHeader}>
+      <View style={[styles.routeHeader, importPreviewMode && styles.routeHeaderImport]}>
         <Text style={styles.routeHeaderTitle}>
           {importPreviewMode ? `Importação (${importRouteIds.length} rotas)` : `Rota #${route.params.routeId}`}
         </Text>
+        {importPreviewMode ? (
+          <>
+            <View style={styles.routeHeaderEpsRow}>
+              <Text style={styles.epsLabel}>EPS (m)</Text>
+              <TextInput
+                value={importEpsInput}
+                onChangeText={onImportEpsChange}
+                keyboardType="number-pad"
+                placeholder="Ex: 50"
+                placeholderTextColor={colors.textSecondary}
+                style={styles.epsInput}
+              />
+              <Text style={styles.epsApplied}>Atual: {activeImportEps}m</Text>
+            </View>
+            <PrimaryButton
+              label="Confirmar"
+              onPress={onConfirmImportEps}
+            />
+          </>
+        ) : null}
       </View>
 
       {badge ? (
@@ -1048,24 +1068,6 @@ export function MapScreen({ route, navigation }: Props) {
             <Text style={styles.bottomHint}>
               Rotas da importação por cor. Altere o EPS para recalcular os agrupamentos no mapa em tempo real.
             </Text>
-
-            <View style={styles.epsRow}>
-              <Text style={styles.epsLabel}>EPS (m)</Text>
-              <TextInput
-                value={importEpsInput}
-                onChangeText={onImportEpsChange}
-                keyboardType="number-pad"
-                placeholder="Ex: 50"
-                placeholderTextColor={colors.textSecondary}
-                style={styles.epsInput}
-              />
-              <Text style={styles.epsApplied}>Atual: {activeImportEps}m</Text>
-            </View>
-            <PrimaryButton
-              label="Confirmar"
-              onPress={onConfirmImportEps}
-              style={styles.confirmImportButton}
-            />
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.legendRow}>
               {importLegend.map((item) => (
@@ -1130,10 +1132,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8
   },
+  routeHeaderImport: {
+    left: 14,
+    right: 14
+  },
   routeHeaderTitle: {
     color: colors.textPrimary,
     fontWeight: '800',
     fontSize: 14
+  },
+  routeHeaderEpsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 10
   },
   importLoadingOverlay: {
     position: 'absolute',
@@ -1217,12 +1230,6 @@ const styles = StyleSheet.create({
   bottomActionButton: {
     flex: 1
   },
-  epsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10
-  },
   epsLabel: {
     color: colors.textPrimary,
     fontWeight: '700',
@@ -1243,9 +1250,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '700'
-  },
-  confirmImportButton: {
-    marginBottom: 10
   },
   legendRow: {
     gap: 8,

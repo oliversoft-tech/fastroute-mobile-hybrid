@@ -16,7 +16,7 @@
     "eas:build:preview": "eas build -p android --profile preview",
     "eas:update:preview": "eas update --channel preview",
     "eas:update:production": "eas update --channel production",
-    "test:unit": "node --import tsx --test test/unit/**/*.test.ts",
+    "test:unit": "bash ./scripts/ci/run-unit-tests.sh",
     "test:functional:android": "bash ./scripts/ci/run-maestro-tests.sh android",
     "test:functional:ios": "bash ./scripts/ci/run-maestro-tests.sh ios",
     "test:regression": "npm run test:unit"

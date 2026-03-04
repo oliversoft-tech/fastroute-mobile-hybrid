@@ -122,23 +122,13 @@ export function ImportRouteScreen({ navigation }: Props) {
         const firstRouteId = importedRouteIds[0];
         const firstRoute = routes.find((entry) => entry.id === firstRouteId) ?? null;
         const firstRouteWaypoints = await listRouteWaypoints(firstRouteId, { forceRefresh: true });
-        Alert.alert(
-          'Rota importada com sucesso',
-          'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.',
-          [
-            {
-              text: 'OK',
-              onPress: () =>
-                navigation.replace('Map', {
-                  routeId: firstRouteId,
-                  routeIds: importedRouteIds,
-                  importEpsMeters: Math.trunc(parsedEpsMeters),
-                  waypoints: firstRouteWaypoints,
-                  routeStatus: firstRoute?.status
-                })
-            }
-          ]
-        );
+        navigation.replace('Map', {
+          routeId: firstRouteId,
+          routeIds: importedRouteIds,
+          importEpsMeters: Math.trunc(parsedEpsMeters),
+          waypoints: firstRouteWaypoints,
+          routeStatus: firstRoute?.status
+        });
         return;
       }
 
@@ -148,50 +138,17 @@ export function ImportRouteScreen({ navigation }: Props) {
         routeCreatedAfterImport;
 
       if (!targetRoute) {
-        Alert.alert(
-          'Importação recebida',
-          'As rotas desta importação aparecerão assim que o processamento for concluído.',
-          [
-            {
-              text: 'OK',
-              onPress: () => navigation.replace('Routes')
-            }
-          ]
-        );
+        navigation.replace('Routes');
         return;
       }
 
       const waypoints = await listRouteWaypoints(targetRoute.id, { forceRefresh: true });
-      if (waypoints.length === 0) {
-        Alert.alert(
-          'Rota importada com sucesso',
-          'A rota foi criada e ficará disponível no detalhamento assim que os waypoints forem processados.',
-          [
-            {
-              text: 'OK',
-              onPress: () => navigation.replace('RouteDetail', { routeId: targetRoute.id, refreshAt: Date.now() })
-            }
-          ]
-        );
-        return;
-      }
-
-      Alert.alert(
-        'Rota importada com sucesso',
-        'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.',
-        [
-          {
-            text: 'OK',
-            onPress: () =>
-              navigation.replace('Map', {
-                routeId: targetRoute.id,
-                waypoints,
-                routeStatus: targetRoute.status,
-                forceEnableReorderActions: true
-              })
-          }
-        ]
-      );
+      navigation.replace('Map', {
+        routeId: targetRoute.id,
+        waypoints,
+        routeStatus: targetRoute.status,
+        forceEnableReorderActions: true
+      });
     } catch (error) {
       Alert.alert('Erro na importação', getApiError(error));
     } finally {

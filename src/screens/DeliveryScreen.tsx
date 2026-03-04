@@ -92,7 +92,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
-  const isDelivered = isDeliveredWaypointStatus(currentStatus);
   const payloadUserId = (() => {
     const authContextUserId = userId?.trim() ?? '';
     if (/^\d+$/.test(authContextUserId)) {
@@ -247,13 +246,29 @@ export function DeliveryScreen({ route, navigation }: Props) {
         }
       }
 
-      returnToRouteDetail();
-      if (autoFinishWarning) {
-        Alert.alert(
-          'Rota não finalizada automaticamente',
-          `O waypoint foi atualizado, mas houve erro ao finalizar a rota: ${autoFinishWarning}`
-        );
-      }
+      const normalizedStatus = normalizeWaypointStatus(status);
+      const isDeliveredFlow = normalizedStatus.includes('ENTREGUE') || normalizedStatus.includes('CONCLUID');
+      const isFailureFlow = normalizedStatus.includes('FALHA');
+      const successMessage = isDeliveredFlow
+        ? 'Entrega marcada como entregue com sucesso.'
+        : isFailureFlow
+          ? 'Falha registrada com sucesso.'
+          : 'Status atualizado com sucesso.';
+
+      const autoFinishMessage =
+        shouldTryAutoFinish && !autoFinishWarning
+          ? ' Todos os waypoints da rota foram finalizados e a rota foi concluída automaticamente.'
+          : '';
+      const warningMessage = autoFinishWarning
+        ? ` O waypoint foi atualizado, mas houve erro ao finalizar a rota automaticamente: ${autoFinishWarning}`
+        : '';
+
+      Alert.alert('Atualização concluída', `${successMessage}${autoFinishMessage}${warningMessage}`, [
+        {
+          text: 'OK',
+          onPress: returnToRouteDetail
+        }
+      ]);
     } catch (error) {
       const message = getApiError(error);
       setFeedbackError(message);
@@ -465,7 +480,6 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="success"
           onPress={onConfirmDelivered}
           loading={loading}
-          disabled={isDelivered}
           style={styles.button}
         />
 

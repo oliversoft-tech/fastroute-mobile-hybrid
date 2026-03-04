@@ -119,6 +119,7 @@ export function RouteDetailScreen({ route, navigation }: Props) {
   const waypoints = routeDetail?.waypoints ?? [];
   const normalizedRouteStatus = normalizeRouteStatus(routeDetail?.status);
   const isRouteConcludedOrCanceled = normalizedRouteStatus.includes('FINALIZ') || normalizedRouteStatus.includes('CONCLUID') || normalizedRouteStatus.includes('CANCEL');
+  const isRouteCreated = normalizedRouteStatus.includes('CRIADA') || normalizedRouteStatus.includes('CRIADO');
   const isStartDisabled =
     saving ||
     startLocked ||
@@ -221,27 +222,29 @@ export function RouteDetailScreen({ route, navigation }: Props) {
 
           {waypoints.map((waypoint) => {
             const meta = getWaypointMeta(waypoint);
+            const waypointDisabled = isRouteCreated;
 
             return (
               <TouchableOpacity
                 key={waypoint.id}
-                style={styles.waypointCard}
+                style={[styles.waypointCard, waypointDisabled && styles.waypointCardDisabled]}
                 onPress={() => onWaypointPress(waypoint)}
+                disabled={waypointDisabled}
               >
                 <View style={styles.waypointTop}>
                   <View style={styles.waypointTextColumn}>
                     <View style={styles.waypointTitleRow}>
-                      <View style={styles.seqBadge}>
-                        <Text style={styles.seqBadgeText}>
+                      <View style={[styles.seqBadge, waypointDisabled && styles.seqBadgeDisabled]}>
+                        <Text style={[styles.seqBadgeText, waypointDisabled && styles.seqBadgeTextDisabled]}>
                           #{waypoint.seq_order}
                         </Text>
                       </View>
-                      <Text style={styles.waypointTitle}>
+                      <Text style={[styles.waypointTitle, waypointDisabled && styles.waypointTitleDisabled]}>
                         {meta.title}
                       </Text>
                     </View>
                     {meta.subtitle ? (
-                      <Text style={styles.waypointSub}>
+                      <Text style={[styles.waypointSub, waypointDisabled && styles.waypointSubDisabled]}>
                         {meta.subtitle}
                       </Text>
                     ) : null}

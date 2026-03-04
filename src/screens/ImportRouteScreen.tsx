@@ -134,13 +134,12 @@ export function ImportRouteScreen({ navigation }: Props) {
       const routeCreatedAfterImport = routes.find((route) => !routeIdsBeforeImport.has(route.id));
       const targetRoute =
         routes.find((route) => importedRouteIds.includes(route.id)) ??
-        routeCreatedAfterImport ??
-        routes[0];
+        routeCreatedAfterImport;
 
       if (!targetRoute) {
         Alert.alert(
-          'Rota importada com sucesso',
-          'Você pode alterar a ordem dos pontos da rota arrastando-os uns sobre os outros, se desejar.',
+          'Importação recebida',
+          'As rotas desta importação aparecerão assim que o processamento for concluído.',
           [
             {
               text: 'OK',

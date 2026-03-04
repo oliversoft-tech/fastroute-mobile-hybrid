@@ -366,7 +366,23 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
     throw new Error(readErrorMessage(data, 'Falha ao atualizar rotas.'));
   }
 
-  const routes = extractRoutesFromPullResponse(data);
+  let routes = extractRoutesFromPullResponse(data);
+
+  if (routes.length === 0) {
+    try {
+      // Fallback de compatibilidade: alguns ambientes ainda expõem o snapshot em /route.
+      const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'));
+      if (isPayloadOk(routeSnapshotResponse.data)) {
+        const fallbackRoutes = extractRoutesFromPullResponse(routeSnapshotResponse.data);
+        if (fallbackRoutes.length > 0) {
+          routes = fallbackRoutes;
+        }
+      }
+    } catch {
+      // Mantém silencioso para preservar o fluxo principal de /sync/pull.
+    }
+  }
+
   if (routes.length > 0) {
     await saveRouteSnapshot(routes);
   }

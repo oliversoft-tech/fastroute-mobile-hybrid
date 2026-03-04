@@ -861,7 +861,7 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
         if (!firstFailureMessage) {
           firstFailureMessage = itemFailedMessage;
         }
-        continue;
+        break;
       }
 
       await markSyncOperationDone(item.id);
@@ -873,6 +873,7 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
       if (!firstFailureMessage) {
         firstFailureMessage = message;
       }
+      break;
     }
   }
 

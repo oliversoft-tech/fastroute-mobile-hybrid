@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
-    "@oliverbill/fastroute-domain": "^0.2.0",
+    "@oliverbill/fastroute-domain": "^0.3.0",
     "@react-navigation/native": "^7.0.14",
     "@react-navigation/native-stack": "^7.2.0",
     "@supabase/supabase-js": "^2.97.0",
@@ -46,7 +46,8 @@
     "react-native-safe-area-context": "4.12.0",
     "react-native-screens": "~4.4.0",
     "react-native-web": "~0.19.13",
-    "react-native-webview": "^13.12.5"
+    "react-native-webview": "^13.12.5",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22.19.13",

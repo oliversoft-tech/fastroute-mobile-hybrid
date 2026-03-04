@@ -92,6 +92,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const meta = getWaypointMeta(waypoint);
+  const isDelivered = isDeliveredWaypointStatus(currentStatus);
   const payloadUserId = (() => {
     const authContextUserId = userId?.trim() ?? '';
     if (/^\d+$/.test(authContextUserId)) {
@@ -464,6 +465,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
           variant="success"
           onPress={onConfirmDelivered}
           loading={loading}
+          disabled={isDelivered}
           style={styles.button}
         />
 

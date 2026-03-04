@@ -20,7 +20,7 @@ import { refreshWithSupabase } from '../api/supabaseClient';
 import { resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/authStorage';
 import { invalidateRouteQueryCache } from '../state/routesQueryCache';
-import { maybeRunInitialAutoSync, syncNow } from '../offline/syncEngine';
+import { forceLegacyRouteHydration, maybeRunInitialAutoSync, syncNow } from '../offline/syncEngine';
 import { forceE2ESeedData } from '../e2e/seedData';
 
 const runtimeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } })
@@ -194,7 +194,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      await syncNow('manual', { fullPull: true });
+      const syncResult = await syncNow('manual', { fullPull: true });
+      if (syncResult.ok && syncResult.pulledRoutes === 0) {
+        await forceLegacyRouteHydration();
+      }
     } catch (syncError) {
       console.warn('[Auth] Falha ao sincronizar rotas após login:', syncError);
     }

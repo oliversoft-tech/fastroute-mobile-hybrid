@@ -171,7 +171,15 @@ function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoi
 
   const seqOrder = toPositiveInt(item.seq_order ?? item.seqorder ?? item.seqOrder, index + 1);
   const latitude = toNullableNumber(item.latitude ?? item.lat ?? address?.latitude ?? address?.lat);
-  const longitude = toNullableNumber(item.longitude ?? item.lng ?? item.lon ?? address?.longitude ?? address?.lng);
+  const longitude = toNullableNumber(
+    item.longitude ??
+      item.long ??
+      item.lng ??
+      item.lon ??
+      address?.longitude ??
+      address?.lng ??
+      address?.long
+  );
 
   return {
     id,
@@ -192,6 +200,15 @@ function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoi
     latitude,
     longitude
   };
+}
+
+async function hydrateRoutesFromLegacyRouteSnapshotEndpoint() {
+  const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'));
+  if (!isPayloadOk(routeSnapshotResponse.data)) {
+    return [] as RouteDetail[];
+  }
+
+  return extractRoutesFromPullResponse(routeSnapshotResponse.data);
 }
 
 function normalizeRoute(raw: unknown): RouteDetail | null {
@@ -371,12 +388,9 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
   if (routes.length === 0) {
     try {
       // Fallback de compatibilidade: alguns ambientes ainda expõem o snapshot em /route.
-      const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'));
-      if (isPayloadOk(routeSnapshotResponse.data)) {
-        const fallbackRoutes = extractRoutesFromPullResponse(routeSnapshotResponse.data);
-        if (fallbackRoutes.length > 0) {
-          routes = fallbackRoutes;
-        }
+      const fallbackRoutes = await hydrateRoutesFromLegacyRouteSnapshotEndpoint();
+      if (fallbackRoutes.length > 0) {
+        routes = fallbackRoutes;
       }
     } catch {
       // Mantém silencioso para preservar o fluxo principal de /sync/pull.
@@ -387,6 +401,15 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
     await saveRouteSnapshot(routes);
   }
 
+  return routes.length;
+}
+
+export async function forceLegacyRouteHydration() {
+  const routes = await hydrateRoutesFromLegacyRouteSnapshotEndpoint();
+  if (routes.length > 0) {
+    await saveRouteSnapshot(routes);
+    await setLastSyncAt(new Date().toISOString());
+  }
   return routes.length;
 }
 

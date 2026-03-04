@@ -722,6 +722,15 @@ export function MapScreen({ route, navigation }: Props) {
     [applyImportRecalculation]
   );
 
+  const onConfirmImportEps = useCallback(() => {
+    const parsed = Math.trunc(Number(importEpsInput));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      Alert.alert('EPS inválido', 'Informe um EPS válido para confirmar.');
+      return;
+    }
+    applyImportRecalculation(parsed);
+  }, [applyImportRecalculation, importEpsInput]);
+
   const singleRoutePoints = useMemo<SingleMapPoint[]>(
     () =>
       mapWaypoints.map((waypoint) => {
@@ -1049,6 +1058,11 @@ export function MapScreen({ route, navigation }: Props) {
               />
               <Text style={styles.epsApplied}>Atual: {activeImportEps}m</Text>
             </View>
+            <PrimaryButton
+              label="Confirmar"
+              onPress={onConfirmImportEps}
+              style={styles.confirmImportButton}
+            />
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.legendRow}>
               {importLegend.map((item) => (
@@ -1226,6 +1240,9 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '700'
+  },
+  confirmImportButton: {
+    marginBottom: 10
   },
   legendRow: {
     gap: 8,

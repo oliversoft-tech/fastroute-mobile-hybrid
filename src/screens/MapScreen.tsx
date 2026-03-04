@@ -729,7 +729,10 @@ export function MapScreen({ route, navigation }: Props) {
       return;
     }
     applyImportRecalculation(parsed);
-  }, [applyImportRecalculation, importEpsInput]);
+    if (importRouteIds.length > 0) {
+      navigation.replace('ImportRoutes', { routeIds: importRouteIds });
+    }
+  }, [applyImportRecalculation, importEpsInput, importRouteIds, navigation]);
 
   const singleRoutePoints = useMemo<SingleMapPoint[]>(
     () =>

@@ -3,9 +3,13 @@ import { getApiError, getAuthAccessToken, httpClient } from '../api/httpClient';
 import { buildFastRouteApiUrl } from '../config/api';
 import { enrichWaypointsWithAddressData } from '../api/supabaseDataApi';
 import {
+  applyLocalWaypointReorder,
   SyncQueueItem,
   countPendingSyncOperations,
+  deleteLocalRoute,
   getDailySyncTime,
+  getLocalRoute,
+  getLocalWaypoint,
   getLastDailySyncDate,
   getLastSyncAt,
   isInitialSyncDone,
@@ -16,7 +20,9 @@ import {
   saveRouteSnapshot,
   setInitialSyncDone,
   setLastDailySyncDate,
-  setLastSyncAt
+  setLastSyncAt,
+  updateLocalRouteStatus,
+  updateLocalWaypointStatus
 } from './localDb';
 
 type SyncTrigger = 'manual' | 'scheduled';
@@ -40,9 +46,31 @@ interface ApiRecord {
   [key: string]: unknown;
 }
 
+interface ProcessPendingQueueResult {
+  processed: number;
+  failed: boolean;
+  failedMessage: string | null;
+  pushedItems: SyncQueueItem[];
+}
+
 let syncInFlight: Promise<SyncResult> | null = null;
 const syncFinishedListeners = new Set<SyncFinishedListener>();
 const SYNC_TIMEOUT_MS = 45000;
+const ROUTE_STATUS_RANK: Record<RouteStatus, number> = {
+  CRIADA: 1,
+  PENDENTE: 2,
+  EM_ROTA: 3,
+  EM_ANDAMENTO: 3,
+  FINALIZADA: 4
+};
+const WAYPOINT_STATUS_RANK: Record<WaypointStatus, number> = {
+  PENDENTE: 1,
+  REORDENADO: 2,
+  EM_ROTA: 3,
+  CONCLUIDO: 4,
+  'FALHA TEMPO ADVERSO': 4,
+  'FALHA MORADOR AUSENTE': 4
+};
 
 function normalizeText(value: unknown) {
   return String(value ?? '')
@@ -89,6 +117,79 @@ function normalizeWaypointStatus(value: unknown): WaypointStatus {
     return 'CONCLUIDO';
   }
   return 'PENDENTE';
+}
+
+function toQueueRouteId(payload: Record<string, unknown>) {
+  const routeId = Math.trunc(Number(payload.routeId ?? payload.route_id));
+  if (!Number.isFinite(routeId) || routeId <= 0) {
+    return null;
+  }
+  return routeId;
+}
+
+function toQueueWaypointId(payload: Record<string, unknown>) {
+  const waypointId = Math.trunc(Number(payload.waypointId ?? payload.waypoint_id));
+  if (!Number.isFinite(waypointId) || waypointId <= 0) {
+    return null;
+  }
+  return waypointId;
+}
+
+function isTerminalWaypointStatus(status: WaypointStatus) {
+  return status === 'CONCLUIDO' || status === 'FALHA TEMPO ADVERSO' || status === 'FALHA MORADOR AUSENTE';
+}
+
+function shouldUpgradeRouteStatus(current: RouteStatus, target: RouteStatus) {
+  return ROUTE_STATUS_RANK[target] > ROUTE_STATUS_RANK[current];
+}
+
+function shouldUpgradeWaypointStatus(current: WaypointStatus, target: WaypointStatus) {
+  return WAYPOINT_STATUS_RANK[target] > WAYPOINT_STATUS_RANK[current];
+}
+
+function normalizeQueuedWaypointStatus(value: unknown): WaypointStatus | null {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.includes('ENTREGUE') || normalized.includes('CONCLUID')) {
+    return 'CONCLUIDO';
+  }
+  if (normalized.includes('FALHA TEMPO ADVERSO')) {
+    return 'FALHA TEMPO ADVERSO';
+  }
+  if (normalized.includes('FALHA MORADOR AUSENTE')) {
+    return 'FALHA MORADOR AUSENTE';
+  }
+  if (normalized.includes('EM_ROTA')) {
+    return 'EM_ROTA';
+  }
+  if (normalized.includes('REORDEN')) {
+    return 'REORDENADO';
+  }
+  if (normalized.includes('PEND')) {
+    return 'PENDENTE';
+  }
+  return null;
+}
+
+function extractQueuedReorderedWaypoints(payload: Record<string, unknown>) {
+  const rawList = Array.isArray(payload.reorderedWaypoints) ? payload.reorderedWaypoints : [];
+  return rawList
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is ApiRecord => Boolean(entry))
+    .map((entry) => ({
+      seqorder: Math.trunc(Number(entry.seqorder)),
+      waypoint_id: Math.trunc(Number(entry.waypoint_id))
+    }))
+    .filter(
+      (entry) =>
+        Number.isFinite(entry.seqorder) &&
+        entry.seqorder > 0 &&
+        Number.isFinite(entry.waypoint_id) &&
+        entry.waypoint_id > 0
+    );
 }
 
 function asRecord(value: unknown): ApiRecord | null {
@@ -389,10 +490,10 @@ function notifySyncFinished(result: SyncResult) {
   });
 }
 
-async function processPendingQueue() {
+async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
   const pending = await listPendingSyncOperations(500);
   if (pending.length === 0) {
-    return { processed: 0, failed: false, failedMessage: null as string | null };
+    return { processed: 0, failed: false, failedMessage: null as string | null, pushedItems: [] };
   }
 
   const changes = pending.map((item: SyncQueueItem) => ({
@@ -413,11 +514,100 @@ async function processPendingQueue() {
     }
 
     await Promise.all(pending.map((item) => markSyncOperationDone(item.id)));
-    return { processed: pending.length, failed: false, failedMessage: null as string | null };
+    return { processed: pending.length, failed: false, failedMessage: null as string | null, pushedItems: pending };
   } catch (error) {
     const message = getApiError(error);
     await markSyncOperationFailed(pending[0].id, message);
-    return { processed: 0, failed: true, failedMessage: message };
+    return { processed: 0, failed: true, failedMessage: message, pushedItems: [] };
+  }
+}
+
+async function reconcileRecentlyPushedOperations(operations: SyncQueueItem[]) {
+  if (operations.length === 0) {
+    return;
+  }
+
+  for (const operation of operations) {
+    const payload = operation.payload ?? {};
+
+    switch (operation.opType) {
+      case 'START_ROUTE': {
+        const routeId = toQueueRouteId(payload);
+        if (!routeId) {
+          break;
+        }
+        const route = await getLocalRoute(routeId);
+        if (route && shouldUpgradeRouteStatus(route.status, 'EM_ANDAMENTO')) {
+          await updateLocalRouteStatus(routeId, 'EM_ANDAMENTO');
+        }
+        break;
+      }
+      case 'FINISH_ROUTE': {
+        const routeId = toQueueRouteId(payload);
+        if (!routeId) {
+          break;
+        }
+        const route = await getLocalRoute(routeId);
+        if (route && shouldUpgradeRouteStatus(route.status, 'FINALIZADA')) {
+          await updateLocalRouteStatus(routeId, 'FINALIZADA');
+        }
+        break;
+      }
+      case 'REORDER_WAYPOINTS': {
+        const routeId = toQueueRouteId(payload);
+        if (!routeId) {
+          break;
+        }
+        const reorderedWaypoints = extractQueuedReorderedWaypoints(payload);
+        if (reorderedWaypoints.length === 0) {
+          break;
+        }
+
+        const applicableReorder = [];
+        for (const entry of reorderedWaypoints) {
+          const waypoint = await getLocalWaypoint(entry.waypoint_id);
+          if (!waypoint || Number(waypoint.route_id) !== routeId || isTerminalWaypointStatus(waypoint.status)) {
+            continue;
+          }
+          applicableReorder.push(entry);
+        }
+
+        if (applicableReorder.length > 0) {
+          await applyLocalWaypointReorder(routeId, applicableReorder);
+        }
+        break;
+      }
+      case 'UPDATE_WAYPOINT_STATUS': {
+        const waypointId = toQueueWaypointId(payload);
+        const targetStatus = normalizeQueuedWaypointStatus(payload.status);
+        if (!waypointId || !targetStatus) {
+          break;
+        }
+        const waypoint = await getLocalWaypoint(waypointId);
+        if (!waypoint) {
+          break;
+        }
+
+        if (
+          waypoint.status === targetStatus ||
+          shouldUpgradeWaypointStatus(waypoint.status, targetStatus) ||
+          isTerminalWaypointStatus(targetStatus)
+        ) {
+          await updateLocalWaypointStatus(waypointId, targetStatus);
+        }
+        break;
+      }
+      case 'DELETE_ROUTE': {
+        const routeId = toQueueRouteId(payload);
+        if (!routeId) {
+          break;
+        }
+        await deleteLocalRoute(routeId);
+        break;
+      }
+      default:
+        break;
+    }
   }
 }
 
@@ -484,6 +674,7 @@ async function runSync(trigger: SyncTrigger, options?: SyncOptions): Promise<Syn
   let pulledRoutes = 0;
   try {
     pulledRoutes = await pullRemoteSnapshot(options);
+    await reconcileRecentlyPushedOperations(queueResult.pushedItems);
   } catch (error) {
     const pendingOperations = await countPendingSyncOperations();
     return {

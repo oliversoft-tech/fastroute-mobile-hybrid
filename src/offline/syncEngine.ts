@@ -1,6 +1,7 @@
 import { RouteDetail, RouteStatus, Waypoint, WaypointStatus } from '../api/types';
 import { getApiError, getAuthAccessToken, httpClient } from '../api/httpClient';
 import { buildFastRouteApiUrl } from '../config/api';
+import { enrichWaypointsWithAddressData } from '../api/supabaseDataApi';
 import {
   SyncQueueItem,
   countPendingSyncOperations,
@@ -281,6 +282,53 @@ function extractRoutesFromPullResponse(payload: unknown): RouteDetail[] {
   return Array.from(deduplicated.values());
 }
 
+function hasDetailedAddressTitle(title: unknown) {
+  if (typeof title !== 'string') {
+    return false;
+  }
+
+  const trimmed = title.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const normalized = normalizeText(trimmed);
+  return normalized !== 'ENDERECO NAO INFORMADO';
+}
+
+async function enrichRoutesWithDetailedAddress(routes: RouteDetail[]) {
+  if (routes.length === 0) {
+    return routes;
+  }
+
+  const enrichedRoutes = await Promise.all(
+    routes.map(async (route) => {
+      const baseWaypoints = route.waypoints ?? [];
+      if (baseWaypoints.length === 0) {
+        return route;
+      }
+
+      const needsAddressEnrichment = baseWaypoints.some((waypoint) => !hasDetailedAddressTitle(waypoint.title));
+      if (!needsAddressEnrichment) {
+        return route;
+      }
+
+      try {
+        const enrichedWaypoints = await enrichWaypointsWithAddressData(baseWaypoints);
+        return {
+          ...route,
+          waypoints: enrichedWaypoints,
+          waypoints_count: enrichedWaypoints.length
+        };
+      } catch {
+        return route;
+      }
+    })
+  );
+
+  return enrichedRoutes;
+}
+
 function readErrorMessage(payload: unknown, fallback: string) {
   const record = asRecord(payload);
   if (!record) {
@@ -398,7 +446,8 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
   }
 
   if (routes.length > 0) {
-    await saveRouteSnapshot(routes);
+    const enrichedRoutes = await enrichRoutesWithDetailedAddress(routes);
+    await saveRouteSnapshot(enrichedRoutes);
   }
 
   return routes.length;
@@ -407,7 +456,8 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
 export async function forceLegacyRouteHydration() {
   const routes = await hydrateRoutesFromLegacyRouteSnapshotEndpoint();
   if (routes.length > 0) {
-    await saveRouteSnapshot(routes);
+    const enrichedRoutes = await enrichRoutesWithDetailedAddress(routes);
+    await saveRouteSnapshot(enrichedRoutes);
     await setLastSyncAt(new Date().toISOString());
   }
   return routes.length;

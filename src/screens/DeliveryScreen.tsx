@@ -394,7 +394,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
     }
   };
 
-  const onConfirmDelivered = () => {
+  const proceedMarkDelivered = () => {
     if (!hasUploadedPhoto) {
       setShowDeliveredConfirmModal(true);
       return;
@@ -409,7 +409,22 @@ export function DeliveryScreen({ route, navigation }: Props) {
     });
   };
 
-  const onConfirmFailure = async () => {
+  const onConfirmDelivered = () => {
+    Alert.alert(
+      'Confirmação',
+      'Deseja realmente marcar como entregue ?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar',
+          style: 'default',
+          onPress: proceedMarkDelivered
+        }
+      ]
+    );
+  };
+
+  const proceedMarkFailure = async () => {
     const obsFalha = failureObs;
     setShowFailureModal(false);
     setFailureObs('');
@@ -420,6 +435,23 @@ export function DeliveryScreen({ route, navigation }: Props) {
       address_id: waypoint.address_id,
       image_uri: uploadedPhotoUri ?? undefined
     });
+  };
+
+  const onConfirmFailure = () => {
+    Alert.alert(
+      'Confirmação',
+      'Deseja realmente marcar como falha ?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar',
+          style: 'default',
+          onPress: () => {
+            void proceedMarkFailure();
+          }
+        }
+      ]
+    );
   };
 
   const openInRouteMap = () => {

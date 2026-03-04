@@ -34,8 +34,15 @@ function pseudoCoordinate(seed: number, origin: number, factor: number) {
 }
 
 export function getWaypointMeta(waypoint: Waypoint): WaypointMeta {
-  const normalizedTitle = waypoint.title?.trim() || 'Endereço não informado';
-  const normalizedSubtitle = waypoint.subtitle?.trim() ?? '';
+  const normalizedAddressId = Math.trunc(Number(waypoint.address_id));
+  const hasAddressId = Number.isFinite(normalizedAddressId) && normalizedAddressId > 0;
+  const normalizedTitle =
+    waypoint.title?.trim() || (hasAddressId ? `Endereço ${normalizedAddressId}` : `Waypoint #${waypoint.id}`);
+  const normalizedSubtitle =
+    waypoint.subtitle?.trim() ??
+    (typeof waypoint.latitude === 'number' && typeof waypoint.longitude === 'number'
+      ? `${waypoint.latitude.toFixed(6)}, ${waypoint.longitude.toFixed(6)}`
+      : '');
 
   if (typeof waypoint.latitude === 'number' && typeof waypoint.longitude === 'number') {
     return {

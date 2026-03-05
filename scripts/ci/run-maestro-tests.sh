@@ -46,6 +46,9 @@ if ! command -v maestro >/dev/null 2>&1; then
   export PATH="$PATH:$HOME/.maestro/bin"
 fi
 
+# Reduce flakiness in CI sessions.
+export MAESTRO_CLI_NO_ANALYTICS=1
+
 if [[ "$PLATFORM" == "android" ]]; then
   APP_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
   if [[ ! -f "$APP_PATH" ]]; then
@@ -61,6 +64,9 @@ if [[ "$PLATFORM" == "ios" ]]; then
     echo "Nenhum simulador iOS bootado." >&2
     exit 1
   fi
+
+  # Improves stability for driver startup on slower CI runners.
+  export MAESTRO_DRIVER_STARTUP_TIMEOUT="${MAESTRO_DRIVER_STARTUP_TIMEOUT:-300000}"
 fi
 
 mkdir -p ".maestro/results/$PLATFORM"
@@ -73,5 +79,83 @@ echo "- Platform: $PLATFORM"
 echo "- Flow target: $FLOW_TARGET"
 echo "- JUnit: $RESULT_FILE"
 echo "- Debug output: $DEBUG_DIR"
+echo "- Driver startup timeout (ms): ${MAESTRO_DRIVER_STARTUP_TIMEOUT:-default}"
 
-maestro test "$FLOW_TARGET" --format junit --output "$RESULT_FILE" --debug-output "$DEBUG_DIR"
+restart_ios_simulator() {
+  local sim_id="${MAESTRO_IOS_SIM_ID:-}"
+  if [[ -z "$sim_id" ]]; then
+    sim_id="$(xcrun simctl list devices booted | awk -F '[()]' '/Booted/ { print $2; exit }')"
+  fi
+
+  if [[ -z "$sim_id" ]]; then
+    return 0
+  fi
+
+  xcrun simctl shutdown "$sim_id" || true
+  xcrun simctl boot "$sim_id" || true
+  xcrun simctl bootstatus "$sim_id" -b || true
+  sleep 8
+}
+
+run_one_flow() {
+  local flow_path="$1"
+  local flow_name="$2"
+  local flow_result="$3"
+  local flow_debug="$4"
+
+  if maestro test "$flow_path" --format junit --output "$flow_result" --debug-output "$flow_debug"; then
+    return 0
+  fi
+
+  if [[ "$PLATFORM" != "ios" ]]; then
+    return 1
+  fi
+
+  echo "Flow '$flow_name' falhou no iOS. Reiniciando simulador e tentando novamente..."
+  restart_ios_simulator
+  maestro test "$flow_path" --format junit --output "$flow_result" --debug-output "$flow_debug"
+}
+
+FLOW_FILES=()
+if [[ -d "$FLOW_TARGET" ]]; then
+  while IFS= read -r flow; do
+    FLOW_FILES+=("$flow")
+  done < <(find "$FLOW_TARGET" -maxdepth 1 -type f -name "*.yaml" | sort)
+else
+  FLOW_FILES+=("$FLOW_TARGET")
+fi
+
+if [[ "${#FLOW_FILES[@]}" -eq 0 ]]; then
+  echo "Nenhum flow .yaml encontrado em: $FLOW_TARGET" >&2
+  exit 1
+fi
+
+failures=0
+last_result=""
+
+for flow_path in "${FLOW_FILES[@]}"; do
+  flow_base="$(basename "$flow_path")"
+  flow_name="${flow_base%.yaml}"
+  flow_result=".maestro/results/$PLATFORM/junit-${flow_name}.xml"
+  flow_debug="$DEBUG_DIR/$flow_name"
+  mkdir -p "$flow_debug"
+
+  echo ""
+  echo "==> Running flow: $flow_name"
+  if run_one_flow "$flow_path" "$flow_name" "$flow_result" "$flow_debug"; then
+    echo "Flow '$flow_name' OK"
+    last_result="$flow_result"
+  else
+    echo "Flow '$flow_name' FAILED"
+    failures=$((failures + 1))
+  fi
+done
+
+if [[ -n "$last_result" && -f "$last_result" ]]; then
+  cp "$last_result" "$RESULT_FILE"
+fi
+
+if [[ "$failures" -gt 0 ]]; then
+  echo "Total de flows com falha: $failures" >&2
+  exit 1
+fi

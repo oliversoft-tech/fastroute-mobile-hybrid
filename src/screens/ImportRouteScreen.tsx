@@ -9,6 +9,7 @@ import {
   View
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import { Asset } from 'expo-asset';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
@@ -22,6 +23,18 @@ import { consumePendingImportFile } from '../state/importFileSelection';
 import { useCallback } from 'react';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ImportRoute'>;
+const TEMP_FIXED_IMPORT_ENABLED = true;
+const FIXED_IMPORT_ASSET = require('../../assets/orders-import.xlsx');
+const FIXED_IMPORT_FILE_NAME = 'orders-import.xlsx';
+const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+interface ImportFileDescriptor {
+  uri: string;
+  name: string;
+  mimeType?: string | null;
+  size?: number | null;
+  webFile?: Blob;
+}
 
 export function ImportRouteScreen({ navigation }: Props) {
   const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
@@ -47,15 +60,31 @@ export function ImportRouteScreen({ navigation }: Props) {
     }, [])
   );
 
-  const toRecentFileEntry = (file: DocumentPicker.DocumentPickerAsset) => ({
+  const toRecentFileEntry = (file: ImportFileDescriptor) => ({
     name: file.name,
     sizeKb: Math.round((file.size ?? 0) / 1024),
     type: file.mimeType?.includes('json')
       ? 'JSON'
       : file.mimeType?.includes('sheet') || file.mimeType?.includes('excel')
         ? 'XLSX'
-        : 'CSV'
+      : 'CSV'
   });
+
+  const resolveFixedImportFile = async (): Promise<ImportFileDescriptor> => {
+    const asset = Asset.fromModule(FIXED_IMPORT_ASSET);
+    if (!asset.localUri) {
+      await asset.downloadAsync();
+    }
+    const uri = asset.localUri ?? asset.uri;
+    if (!uri) {
+      throw new Error('Arquivo fixo de importação indisponível no app.');
+    }
+    return {
+      uri,
+      name: FIXED_IMPORT_FILE_NAME,
+      mimeType: XLSX_MIME_TYPE
+    };
+  };
 
   const pickFile = async () => {
     const response = await DocumentPicker.getDocumentAsync({
@@ -76,7 +105,7 @@ export function ImportRouteScreen({ navigation }: Props) {
   };
 
   const onImport = async () => {
-    if (!selectedFile) {
+    if (!TEMP_FIXED_IMPORT_ENABLED && !selectedFile) {
       Alert.alert('Arquivo obrigatório', 'Selecione um arquivo XLSX ou CSV para continuar.');
       return;
     }
@@ -92,15 +121,25 @@ export function ImportRouteScreen({ navigation }: Props) {
       const routesBeforeImport = await listRoutes({ forceRefresh: true });
       const routeIdsBeforeImport = new Set(routesBeforeImport.map((route) => route.id));
 
+      const fileToImport: ImportFileDescriptor = TEMP_FIXED_IMPORT_ENABLED
+        ? await resolveFixedImportFile()
+        : {
+            uri: selectedFile!.uri,
+            name: selectedFile!.name,
+            mimeType: selectedFile!.mimeType,
+            size: selectedFile!.size,
+            webFile: (selectedFile as DocumentPicker.DocumentPickerAsset & { file?: Blob }).file
+          };
+
       const payload = await importOrders({
-        uri: selectedFile.uri,
-        name: selectedFile.name,
-        mimeType: selectedFile.mimeType,
+        uri: fileToImport.uri,
+        name: fileToImport.name,
+        mimeType: fileToImport.mimeType ?? undefined,
         epsMeters: Math.trunc(parsedEpsMeters),
-        webFile: (selectedFile as DocumentPicker.DocumentPickerAsset & { file?: Blob }).file
+        webFile: fileToImport.webFile
       });
       setResult(payload);
-      const importedEntry = toRecentFileEntry(selectedFile);
+      const importedEntry = toRecentFileEntry(fileToImport);
       setRecentFiles((prev) => [importedEntry, ...prev.filter((entry) => entry.name !== importedEntry.name)].slice(0, 5));
 
       const routes = await listRoutes({ forceRefresh: true });
@@ -161,17 +200,33 @@ export function ImportRouteScreen({ navigation }: Props) {
       <View style={styles.card}>
         <Text style={styles.title}>Importar arquivo de rota</Text>
         <Text style={styles.subtitle}>Selecione um arquivo de pedidos para importação.</Text>
+        {TEMP_FIXED_IMPORT_ENABLED ? (
+          <Text style={styles.fixedModeText}>
+            Modo temporário: importação fixa de {FIXED_IMPORT_FILE_NAME}.
+          </Text>
+        ) : null}
 
-        <TouchableOpacity style={styles.dropzone} onPress={pickFile}>
+        <TouchableOpacity
+          style={styles.dropzone}
+          onPress={pickFile}
+          disabled={TEMP_FIXED_IMPORT_ENABLED}
+        >
           <Text style={styles.dropzoneTitle}>Toque para selecionar</Text>
           <Text style={styles.dropzoneSub}>XLSX ou CSV</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.linkInline} onPress={() => navigation.navigate('FileBrowser')}>
-          <Text style={styles.linkInlineText}>Abrir arquivos locais</Text>
-        </TouchableOpacity>
+        {!TEMP_FIXED_IMPORT_ENABLED ? (
+          <TouchableOpacity style={styles.linkInline} onPress={() => navigation.navigate('FileBrowser')}>
+            <Text style={styles.linkInlineText}>Abrir arquivos locais</Text>
+          </TouchableOpacity>
+        ) : null}
 
-        {selectedFile ? (
+        {TEMP_FIXED_IMPORT_ENABLED ? (
+          <View style={styles.fileCard}>
+            <Text style={styles.fileName}>{FIXED_IMPORT_FILE_NAME}</Text>
+            <Text style={styles.fileMeta}>Arquivo fixo embarcado</Text>
+          </View>
+        ) : selectedFile ? (
           <View style={styles.fileCard}>
             <Text style={styles.fileName}>{selectedFile.name}</Text>
             <Text style={styles.fileMeta}>{Math.round((selectedFile.size ?? 0) / 1024)} KB</Text>
@@ -194,7 +249,7 @@ export function ImportRouteScreen({ navigation }: Props) {
           label="Confirmar importação"
           onPress={onImport}
           loading={loading}
-          disabled={!selectedFile}
+          disabled={loading || (!TEMP_FIXED_IMPORT_ENABLED && !selectedFile)}
         />
 
         <PrimaryButton
@@ -269,6 +324,11 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     color: colors.textSecondary
+  },
+  fixedModeText: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 12
   },
   dropzone: {
     marginTop: 6,

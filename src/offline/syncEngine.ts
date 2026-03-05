@@ -600,8 +600,7 @@ function mapRouteStatusToServer(value: unknown) {
 
 async function buildMutationsForQueueItem(
   item: SyncQueueItem,
-  deviceId: string,
-  importedRouteIds: Set<number>
+  deviceId: string
 ): Promise<SyncMutation[]> {
   const payload = item.payload ?? {};
   const mutations: SyncMutation[] = [];
@@ -612,7 +611,10 @@ async function buildMutationsForQueueItem(
     mutationPayload: Record<string, unknown>,
     allowNotFound = false
   ) => {
-    const baseVersion = await getStoredEntityVersion('route', routeId);
+    const normalizedOp = normalizeText(op);
+    const baseVersion = normalizedOp.includes('CREATE')
+      ? 0
+      : await getStoredEntityVersion('route', routeId);
     mutations.push({
       queueItemId: item.id,
       mutationId: `${item.id}-route-${routeId}-${randomId()}`,
@@ -632,7 +634,10 @@ async function buildMutationsForQueueItem(
     mutationPayload: Record<string, unknown>,
     allowNotFound = false
   ) => {
-    const baseVersion = await getStoredEntityVersion('route_waypoint', waypointId);
+    const normalizedOp = normalizeText(op);
+    const baseVersion = normalizedOp.includes('CREATE')
+      ? 0
+      : await getStoredEntityVersion('route_waypoint', waypointId);
     mutations.push({
       queueItemId: item.id,
       mutationId: `${item.id}-waypoint-${waypointId}-${randomId()}`,
@@ -652,7 +657,7 @@ async function buildMutationsForQueueItem(
       if (!routeId) {
         return mutations;
       }
-      await pushRouteMutation(routeId, 'UPDATE', { status: 'EM_ANDAMENTO' }, importedRouteIds.has(routeId));
+      await pushRouteMutation(routeId, 'UPDATE', { status: 'EM_ANDAMENTO' });
       return mutations;
     }
     case 'FINISH_ROUTE': {
@@ -660,12 +665,7 @@ async function buildMutationsForQueueItem(
       if (!routeId) {
         return mutations;
       }
-      await pushRouteMutation(
-        routeId,
-        'UPDATE',
-        { status: 'CONCLUÍDA', ativa: false },
-        importedRouteIds.has(routeId)
-      );
+      await pushRouteMutation(routeId, 'UPDATE', { status: 'CONCLUÍDA', ativa: false });
       return mutations;
     }
     case 'UPDATE_WAYPOINT_STATUS': {
@@ -678,25 +678,20 @@ async function buildMutationsForQueueItem(
       if (!localWaypoint) {
         return mutations;
       }
-      const routeId = Math.trunc(Number(localWaypoint.route_id));
       await pushWaypointMutation(
         waypointId,
         'UPDATE',
-        { status: mapQueuedWaypointStatusToServer(payload.status) },
-        importedRouteIds.has(routeId)
+        { status: mapQueuedWaypointStatusToServer(payload.status) }
       );
       return mutations;
     }
     case 'REORDER_WAYPOINTS': {
       const reordered = extractQueuedReorderedWaypoints(payload);
       for (const entry of reordered) {
-        const localWaypoint = await getLocalWaypoint(entry.waypoint_id);
-        const routeId = localWaypoint ? Math.trunc(Number(localWaypoint.route_id)) : 0;
         await pushWaypointMutation(
           entry.waypoint_id,
           'UPDATE',
-          { seq_order: entry.seqorder, status: 'REORDENADO' },
-          importedRouteIds.has(routeId)
+          { seq_order: entry.seqorder, status: 'REORDENADO' }
         );
       }
       return mutations;
@@ -706,37 +701,50 @@ async function buildMutationsForQueueItem(
       if (!routeId) {
         return mutations;
       }
-      await pushRouteMutation(
-        routeId,
-        'DELETE',
-        { status: 'CANCELADA', ativa: false },
-        importedRouteIds.has(routeId)
-      );
+      await pushRouteMutation(routeId, 'DELETE', { status: 'CANCELADA', ativa: false });
       return mutations;
     }
-    case 'IMPORT_ROUTE_FILE':
+    case 'IMPORT_ROUTE_FILE': {
+      const routeIds = Array.isArray(payload.route_ids)
+        ? payload.route_ids
+            .map((entry) => Math.trunc(Number(entry)))
+            .filter((routeId) => Number.isFinite(routeId) && routeId > 0)
+        : [];
+
+      for (const routeId of routeIds) {
+        const localRoute = await getLocalRoute(routeId);
+        if (!localRoute) {
+          continue;
+        }
+
+        const localWaypoints = await listLocalWaypoints(routeId);
+        await pushRouteMutation(routeId, 'CREATE', {
+          id: routeId,
+          cluster_id: localRoute.cluster_id ?? null,
+          status: mapRouteStatusToServer(localRoute.status),
+          created_at: localRoute.created_at ?? new Date().toISOString(),
+          waypoints_count: localWaypoints.length,
+          ativa: false
+        });
+
+        for (const waypoint of localWaypoints) {
+          await pushWaypointMutation(waypoint.id, 'CREATE', {
+            id: waypoint.id,
+            route_id: routeId,
+            address_id: waypoint.address_id ?? null,
+            seq_order: waypoint.seq_order ?? 0,
+            status: mapQueuedWaypointStatusToServer(waypoint.status),
+            detailed_address: waypoint.title ?? null,
+            lat: waypoint.latitude ?? null,
+            long: waypoint.longitude ?? null
+          });
+        }
+      }
       return mutations;
+    }
     default:
       return mutations;
   }
-}
-
-function collectImportedRouteIds(pending: SyncQueueItem[]) {
-  const routeIds = new Set<number>();
-  pending.forEach((item) => {
-    if (item.opType !== 'IMPORT_ROUTE_FILE') {
-      return;
-    }
-    const payload = item.payload ?? {};
-    const list = Array.isArray(payload.route_ids) ? payload.route_ids : [];
-    list.forEach((entry) => {
-      const routeId = Math.trunc(Number(entry));
-      if (Number.isFinite(routeId) && routeId > 0) {
-        routeIds.add(routeId);
-      }
-    });
-  });
-  return routeIds;
 }
 
 function readPushMutationResult(payload: unknown): SyncPushMutationResult | null {
@@ -808,6 +816,14 @@ async function pushSingleMutation(mutation: SyncMutation): Promise<{ ok: boolean
       return { ok: true };
     }
 
+    if (normalizedStatus === 'NOT_FOUND' && normalizeText(mutation.op).includes('CREATE')) {
+      return {
+        ok: false,
+        message:
+          'Falha no sync: backend não suporta criação de rotas/waypoints via /sync/push. Atualize o backend para aceitar mutações CREATE.'
+      };
+    }
+
     if (
       normalizedStatus === 'CONFLICT' &&
       attempt === 0 &&
@@ -845,14 +861,13 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
   }
 
   const deviceId = await getSyncDeviceId();
-  const importedRouteIds = collectImportedRouteIds(pending);
   const pushedItems: SyncQueueItem[] = [];
   let processed = 0;
   let firstFailureMessage: string | null = null;
 
   for (const item of pending) {
     try {
-      const mutations = await buildMutationsForQueueItem(item, deviceId, importedRouteIds);
+      const mutations = await buildMutationsForQueueItem(item, deviceId);
 
       if (mutations.length === 0) {
         await markSyncOperationDone(item.id);

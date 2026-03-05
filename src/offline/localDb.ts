@@ -538,6 +538,62 @@ export async function enqueueSyncOperation(
   );
 }
 
+function normalizeRouteIds(values: unknown[]) {
+  return [...new Set(
+    values
+      .map((value) => Math.trunc(Number(value)))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  )].sort((a, b) => a - b);
+}
+
+export async function updatePendingImportRouteIds(previousRouteIds: number[], nextRouteIds: number[]) {
+  const db = await getLocalDb();
+  const previous = new Set(normalizeRouteIds(previousRouteIds));
+  const next = normalizeRouteIds(nextRouteIds);
+  if (previous.size === 0 || next.length === 0) {
+    return false;
+  }
+
+  const rows = await db.getAllAsync<{ id: number; payload: string }>(
+    `SELECT id, payload
+     FROM sync_queue
+     WHERE op_type = 'IMPORT_ROUTE_FILE'
+     ORDER BY id DESC`
+  );
+
+  for (const row of rows) {
+    const payload = parsePayload(row.payload);
+    const payloadRouteIds = normalizeRouteIds(Array.isArray(payload.route_ids) ? payload.route_ids : []);
+    const intersects = payloadRouteIds.some((routeId) => previous.has(routeId));
+    if (!intersects) {
+      continue;
+    }
+
+    const nextPayload: Record<string, unknown> = {
+      ...payload,
+      route_ids: next,
+      routes_generated: next.length
+    };
+
+    if (next.length === 1) {
+      nextPayload.route_id = next[0];
+    } else {
+      delete nextPayload.route_id;
+    }
+
+    await db.runAsync(
+      `UPDATE sync_queue
+       SET payload = ?, last_error = NULL
+       WHERE id = ?`,
+      JSON.stringify(nextPayload),
+      row.id
+    );
+    return true;
+  }
+
+  return false;
+}
+
 export async function listPendingSyncOperations(limit = 100): Promise<SyncQueueItem[]> {
   const db = await getLocalDb();
   const rows = await db.getAllAsync<QueueRow>(

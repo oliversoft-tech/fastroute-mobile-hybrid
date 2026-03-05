@@ -16,7 +16,12 @@ import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { getWaypointMeta } from '../utils/waypointMeta';
-import { getRouteDetails, listRouteWaypoints, updateWaypointOrder } from '../api/routesApi';
+import {
+  confirmImportedRoutesGrouping,
+  getRouteDetails,
+  listRouteWaypoints,
+  updateWaypointOrder
+} from '../api/routesApi';
 import { getApiError } from '../api/httpClient';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { RouteStatus, Waypoint } from '../api/types';
@@ -73,6 +78,7 @@ type ImportBasePoint = {
 
 type ImportDisplayPoint = ImportBasePoint & {
   routeLabel: string;
+  groupIndex: number;
   color: string;
   orderInGroup: number;
 };
@@ -443,7 +449,9 @@ function buildLeafletImportRoutesHtml(points: ImportDisplayPoint[]) {
 function buildDisplayFromSourceRoutes(basePoints: ImportBasePoint[]) {
   const routeIds = [...new Set(basePoints.map((point) => point.routeId))].sort((a, b) => a - b);
   const colorByRoute = new Map<number, string>();
+  const routeIndexById = new Map<number, number>();
   routeIds.forEach((routeId, index) => {
+    routeIndexById.set(routeId, index);
     colorByRoute.set(routeId, colorByIndex(index));
   });
 
@@ -455,6 +463,7 @@ function buildDisplayFromSourceRoutes(basePoints: ImportBasePoint[]) {
     return {
       ...point,
       routeLabel: `Rota #${point.routeId}`,
+      groupIndex: routeIndexById.get(point.routeId) ?? 0,
       color: colorByRoute.get(point.routeId) ?? colorByIndex(0),
       orderInGroup: currentOrder
     };
@@ -530,6 +539,7 @@ function buildDisplayFromRecalculatedEps(basePoints: ImportBasePoint[], epsMeter
     return {
       ...point,
       routeLabel: `Rota ${groupIndex + 1}`,
+      groupIndex,
       color: colorByIndex(groupIndex),
       orderInGroup
     };
@@ -578,6 +588,7 @@ export function MapScreen({ route, navigation }: Props) {
   const [importLegend, setImportLegend] = useState<ImportLegendItem[]>([]);
   const [importEpsInput, setImportEpsInput] = useState(String(initialEps));
   const [activeImportEps, setActiveImportEps] = useState(initialEps);
+  const [importConfirmLoading, setImportConfirmLoading] = useState(false);
 
   useEffect(() => {
     if (importPreviewMode) {
@@ -728,11 +739,44 @@ export function MapScreen({ route, navigation }: Props) {
       Alert.alert('EPS inválido', 'Informe um EPS válido para confirmar.');
       return;
     }
-    applyImportRecalculation(parsed);
-    if (importRouteIds.length > 0) {
-      navigation.replace('ImportRoutes', { routeIds: importRouteIds });
+
+    if (importRouteIds.length === 0) {
+      navigation.replace('ImportRoutes', { routeIds: [] });
+      return;
     }
-  }, [applyImportRecalculation, importEpsInput, importRouteIds, navigation]);
+
+    void (async () => {
+      try {
+        setImportConfirmLoading(true);
+        const grouped = buildDisplayFromRecalculatedEps(importBasePoints, parsed);
+        setImportDisplayPoints(grouped.points);
+        setImportLegend(grouped.legend);
+        setActiveImportEps(parsed);
+        setMapRenderKey((prev) => prev + 1);
+
+        const groupedWaypointIds = [...new Set(grouped.points.map((point) => point.groupIndex))]
+          .sort((a, b) => a - b)
+          .map((groupIndex) =>
+            grouped.points
+              .filter((point) => point.groupIndex === groupIndex)
+              .sort((a, b) => a.orderInGroup - b.orderInGroup || a.waypointId - b.waypointId)
+              .map((point) => point.waypointId)
+          )
+          .filter((entry) => entry.length > 0);
+
+        const confirmedRouteIds = await confirmImportedRoutesGrouping({
+          importRouteIds,
+          groupedWaypointIds
+        });
+
+        navigation.replace('ImportRoutes', { routeIds: confirmedRouteIds });
+      } catch (error) {
+        Alert.alert('Erro ao confirmar importação', getApiError(error));
+      } finally {
+        setImportConfirmLoading(false);
+      }
+    })();
+  }, [importBasePoints, importEpsInput, importRouteIds, navigation]);
 
   const singleRoutePoints = useMemo<SingleMapPoint[]>(
     () =>
@@ -1024,7 +1068,7 @@ export function MapScreen({ route, navigation }: Props) {
 
       <View style={[styles.routeHeader, importPreviewMode && styles.routeHeaderImport]}>
         <Text style={styles.routeHeaderTitle}>
-          {importPreviewMode ? `Importação (${importRouteIds.length} rotas)` : `Rota #${route.params.routeId}`}
+          {importPreviewMode ? `Importação (${importLegend.length || importRouteIds.length} rotas)` : `Rota #${route.params.routeId}`}
         </Text>
         {importPreviewMode ? (
           <>
@@ -1043,6 +1087,8 @@ export function MapScreen({ route, navigation }: Props) {
             <PrimaryButton
               label="Confirmar"
               onPress={onConfirmImportEps}
+              loading={importConfirmLoading}
+              disabled={importLoading || importConfirmLoading}
             />
           </>
         ) : null}

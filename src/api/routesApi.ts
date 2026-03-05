@@ -7,12 +7,14 @@ import {
   applyLocalWaypointReorder,
   deleteLocalRoute,
   enqueueSyncOperation,
+  getLocalDb,
   getLocalRoute,
   getLocalWaypointPhotoUri,
   getLocalWaypoint,
   listLocalRoutes,
   listLocalWaypoints,
   replaceLocalRouteWaypoints,
+  updatePendingImportRouteIds,
   upsertLocalWaypointPhotoUri,
   updateLocalRouteStatus,
   updateLocalWaypointStatus,
@@ -299,6 +301,140 @@ export async function updateWaypointOrder(params: {
     routeId,
     reorderedWaypoints
   });
+}
+
+export async function confirmImportedRoutesGrouping(params: {
+  importRouteIds: number[];
+  groupedWaypointIds: number[][];
+}) {
+  const importRouteIds = [...new Set(
+    params.importRouteIds
+      .map((value) => Math.trunc(Number(value)))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  )].sort((a, b) => a - b);
+
+  if (importRouteIds.length === 0) {
+    return [] as number[];
+  }
+
+  const groups = params.groupedWaypointIds
+    .map((group) =>
+      [...new Set(
+        group
+          .map((value) => Math.trunc(Number(value)))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      )]
+    )
+    .filter((group) => group.length > 0);
+
+  if (groups.length === 0) {
+    throw new Error('Nenhum agrupamento válido para confirmar.');
+  }
+
+  const sourceWaypoints = (
+    await Promise.all(importRouteIds.map((routeId) => listLocalWaypoints(routeId)))
+  ).flat();
+  const sourceWaypointById = new Map<number, Waypoint>(sourceWaypoints.map((waypoint) => [waypoint.id, waypoint]));
+  if (sourceWaypointById.size === 0) {
+    throw new Error('Nenhum waypoint encontrado para as rotas importadas.');
+  }
+
+  const assignedWaypointIds = new Set<number>();
+  const normalizedGroups = groups.map((group) =>
+    group.filter((waypointId) => {
+      if (!sourceWaypointById.has(waypointId) || assignedWaypointIds.has(waypointId)) {
+        return false;
+      }
+      assignedWaypointIds.add(waypointId);
+      return true;
+    })
+  ).filter((group) => group.length > 0);
+
+  const missingWaypointIds = [...sourceWaypointById.keys()].filter((waypointId) => !assignedWaypointIds.has(waypointId));
+  if (missingWaypointIds.length > 0) {
+    if (normalizedGroups.length === 0) {
+      normalizedGroups.push(missingWaypointIds);
+    } else {
+      normalizedGroups[0] = [...normalizedGroups[0], ...missingWaypointIds];
+    }
+  }
+
+  const currentRoutes = await listLocalRoutes();
+  const currentRouteById = new Map(currentRoutes.map((entry) => [entry.id, entry]));
+  const templateRoute = currentRouteById.get(importRouteIds[0]) ?? null;
+
+  const maxRouteId = currentRoutes.reduce((max, entry) => Math.max(max, Math.trunc(Number(entry.id))), 0);
+  let nextRouteId = maxRouteId + 1;
+  const finalRouteIds = normalizedGroups.map((_, index) => importRouteIds[index] ?? nextRouteId++);
+  const finalRouteIdSet = new Set(finalRouteIds);
+  const now = new Date().toISOString();
+
+  const db = await getLocalDb();
+  await db.withTransactionAsync(async () => {
+    for (let index = 0; index < finalRouteIds.length; index += 1) {
+      const routeId = finalRouteIds[index];
+      const group = normalizedGroups[index];
+      const routeMeta = currentRouteById.get(routeId) ?? templateRoute;
+      const routeStatus = routeMeta?.status ?? 'CRIADA';
+      const createdAt = routeMeta?.created_at ?? now;
+
+      await db.runAsync(
+        `INSERT INTO routes (id, cluster_id, status, created_at, waypoints_count, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           cluster_id = excluded.cluster_id,
+           status = excluded.status,
+           created_at = excluded.created_at,
+           waypoints_count = excluded.waypoints_count,
+           updated_at = excluded.updated_at`,
+        routeId,
+        index + 1,
+        routeStatus,
+        createdAt,
+        group.length,
+        now
+      );
+
+      for (let groupIndex = 0; groupIndex < group.length; groupIndex += 1) {
+        const waypointId = group[groupIndex];
+        await db.runAsync(
+          `UPDATE waypoints
+           SET route_id = ?, seq_order = ?, updated_at = ?
+           WHERE id = ?`,
+          routeId,
+          groupIndex + 1,
+          now,
+          waypointId
+        );
+      }
+
+      await db.runAsync(
+        `UPDATE routes
+         SET waypoints_count = (SELECT COUNT(1) FROM waypoints WHERE route_id = ?),
+             updated_at = ?
+         WHERE id = ?`,
+        routeId,
+        now,
+        routeId
+      );
+    }
+
+    for (const routeId of importRouteIds) {
+      if (finalRouteIdSet.has(routeId)) {
+        continue;
+      }
+      await db.runAsync(
+        `DELETE FROM waypoint_photos
+         WHERE waypoint_id IN (SELECT id FROM waypoints WHERE route_id = ?)`,
+        routeId
+      );
+      await db.runAsync('DELETE FROM waypoints WHERE route_id = ?', routeId);
+      await db.runAsync('DELETE FROM routes WHERE id = ?', routeId);
+    }
+  });
+
+  await updatePendingImportRouteIds(importRouteIds, finalRouteIds);
+  return finalRouteIds;
 }
 
 export async function getWaypointDeliveryPhoto(

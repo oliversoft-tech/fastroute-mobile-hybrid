@@ -883,6 +883,13 @@ async function buildMutationsForQueueItem(
             .map((entry) => Math.trunc(Number(entry)))
             .filter((routeId) => Number.isFinite(routeId) && routeId > 0)
         : [];
+      const importIdFromPayload = Math.trunc(Number(payload.import_id ?? payload.importId ?? 0));
+      const importId =
+        Number.isFinite(importIdFromPayload) && importIdFromPayload > 0
+          ? importIdFromPayload
+          : routeIds.length > 0
+            ? routeIds[0]
+            : undefined;
 
       for (const routeId of routeIds) {
         const localRoute = await getLocalRoute(routeId);
@@ -893,6 +900,7 @@ async function buildMutationsForQueueItem(
         const localWaypoints = await listLocalWaypoints(routeId);
         await pushRouteMutation(routeId, 'CREATE', {
           id: routeId,
+          import_id: importId,
           driver_id: driverId,
           user_id: driverId,
           auth_user_id: authUserId,

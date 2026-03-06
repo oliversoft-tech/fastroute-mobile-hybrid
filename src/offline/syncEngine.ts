@@ -871,6 +871,9 @@ async function buildMutationsForQueueItem(
     }
     case 'IMPORT_ROUTE_FILE': {
       const authSession = await loadAuthSession().catch(() => null);
+      const authUserIdFromSession = String(authSession?.userId ?? '').trim();
+      const authUserIdFromPayload = String(payload.auth_user_id ?? payload.authUserId ?? '').trim();
+      const authUserId = authUserIdFromPayload || authUserIdFromSession || undefined;
       const queueDriverId = Math.trunc(
         Number(payload.user_id ?? payload.userId ?? payload.driver_id ?? authSession?.userId ?? 0)
       );
@@ -892,6 +895,7 @@ async function buildMutationsForQueueItem(
           id: routeId,
           driver_id: driverId,
           user_id: driverId,
+          auth_user_id: authUserId,
           cluster_id: localRoute.cluster_id ?? null,
           status: mapRouteStatusToServer(localRoute.status),
           created_at: localRoute.created_at ?? new Date().toISOString(),

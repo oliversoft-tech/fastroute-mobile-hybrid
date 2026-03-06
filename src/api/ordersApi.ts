@@ -401,6 +401,7 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
   let { nextRouteId, nextWaypointId } = await getNextIds();
   const createdAt = new Date().toISOString();
   const routeIds: number[] = [];
+  const importId = Date.now();
   const authSession = await loadAuthSession().catch(() => null);
   const { driverId, authUserId } = await resolveDriverIdentity(authSession?.userId ?? null);
 
@@ -450,6 +451,7 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
     file_name: file.name,
     mime_type: file.mimeType ?? 'application/octet-stream',
     eps_meters: normalizedEps,
+    import_id: importId,
     route_ids: routeIds,
     user_id: driverId,
     auth_user_id: authUserId

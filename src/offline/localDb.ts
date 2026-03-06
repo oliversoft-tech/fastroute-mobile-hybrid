@@ -299,7 +299,12 @@ export async function mergeRouteSnapshot(routes: RouteDetail[]) {
 export async function listLocalRoutes(): Promise<RouteDetail[]> {
   const db = await getLocalDb();
   const rows = await db.getAllAsync<RouteRow>(
-    `SELECT id, cluster_id, status, created_at, waypoints_count
+    `SELECT
+       id,
+       cluster_id,
+       status,
+       created_at,
+       (SELECT COUNT(1) FROM waypoints w WHERE w.route_id = routes.id) AS waypoints_count
      FROM routes
      ORDER BY datetime(created_at) DESC, id DESC`
   );
@@ -317,7 +322,12 @@ export async function listLocalRoutes(): Promise<RouteDetail[]> {
 export async function getLocalRoute(routeId: number): Promise<RouteDetail | null> {
   const db = await getLocalDb();
   const row = await db.getFirstAsync<RouteRow>(
-    `SELECT id, cluster_id, status, created_at, waypoints_count
+    `SELECT
+       id,
+       cluster_id,
+       status,
+       created_at,
+       (SELECT COUNT(1) FROM waypoints w WHERE w.route_id = routes.id) AS waypoints_count
      FROM routes
      WHERE id = ?`,
     routeId

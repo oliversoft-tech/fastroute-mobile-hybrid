@@ -79,7 +79,8 @@ interface SyncPushMutationResult {
 
 let syncInFlight: Promise<SyncResult> | null = null;
 const syncFinishedListeners = new Set<SyncFinishedListener>();
-const SYNC_TIMEOUT_MS = 45000;
+const SYNC_TIMEOUT_MS = 180000;
+const SYNC_HTTP_TIMEOUT_MS = 120000;
 const ROUTE_STATUS_RANK: Record<RouteStatus, number> = {
   CRIADA: 1,
   PENDENTE: 2,
@@ -331,7 +332,9 @@ function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoi
 }
 
 async function hydrateRoutesFromLegacyRouteSnapshotEndpoint() {
-  const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'));
+  const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'), {
+    timeout: SYNC_HTTP_TIMEOUT_MS
+  });
   if (!isPayloadOk(routeSnapshotResponse.data)) {
     return [] as RouteDetail[];
   }
@@ -774,19 +777,25 @@ async function pushSingleMutation(mutation: SyncMutation): Promise<{ ok: boolean
   let currentBaseVersion = mutation.baseVersion;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/push'), {
-      mutations: [
-        {
-          deviceId: mutation.deviceId,
-          mutationId: mutation.mutationId,
-          entityType: mutation.entityType,
-          entityId: mutation.entityId,
-          op: mutation.op,
-          baseVersion: currentBaseVersion,
-          payload: mutation.payload
-        }
-      ]
-    });
+    const { data } = await httpClient.post(
+      buildFastRouteApiUrl('/sync/push'),
+      {
+        mutations: [
+          {
+            deviceId: mutation.deviceId,
+            mutationId: mutation.mutationId,
+            entityType: mutation.entityType,
+            entityId: mutation.entityId,
+            op: mutation.op,
+            baseVersion: currentBaseVersion,
+            payload: mutation.payload
+          }
+        ]
+      },
+      {
+        timeout: SYNC_HTTP_TIMEOUT_MS
+      }
+    );
 
     if (!isPayloadOk(data)) {
       return { ok: false, message: readErrorMessage(data, 'Falha ao sincronizar mutação pendente.') };
@@ -1007,7 +1016,9 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
   const lastSyncAt = await getLastSyncAt();
   const payload = options?.fullPull ? {} : lastSyncAt ? { sinceTs: lastSyncAt } : {};
 
-  const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/pull'), payload);
+  const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/pull'), payload, {
+    timeout: SYNC_HTTP_TIMEOUT_MS
+  });
 
   if (!isPayloadOk(data)) {
     throw new Error(readErrorMessage(data, 'Falha ao atualizar rotas.'));

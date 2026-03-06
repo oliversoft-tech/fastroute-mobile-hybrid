@@ -39,7 +39,7 @@ function normalizeTime(value: string) {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
-export function SettingsScreen({}: Props) {
+export function SettingsScreen({ navigation }: Props) {
   const [dailySyncTime, setDailySyncTimeInput] = useState('19:00');
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -78,8 +78,17 @@ export function SettingsScreen({}: Props) {
     try {
       setLoading(true);
       const result = await syncNow('manual');
-      Alert.alert(result.ok ? 'Sync concluído' : 'Falha no sync', formatSyncSummary(result));
       await loadData();
+      if (result.ok) {
+        Alert.alert('Sync concluído', formatSyncSummary(result), [
+          {
+            text: 'OK',
+            onPress: () => navigation.goBack()
+          }
+        ]);
+        return;
+      }
+      Alert.alert('Falha no sync', formatSyncSummary(result));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Falha ao sincronizar.';
       Alert.alert('Falha no sync', message);

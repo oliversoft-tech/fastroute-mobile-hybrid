@@ -874,10 +874,16 @@ async function buildMutationsForQueueItem(
       const authUserIdFromSession = String(authSession?.userId ?? '').trim();
       const authUserIdFromPayload = String(payload.auth_user_id ?? payload.authUserId ?? '').trim();
       const authUserId = authUserIdFromPayload || authUserIdFromSession || undefined;
+      const parsedDriverIdFromAuthUserId = Math.trunc(Number(authUserIdFromPayload || authUserIdFromSession || 0));
       const queueDriverId = Math.trunc(
         Number(payload.user_id ?? payload.userId ?? payload.driver_id ?? authSession?.userId ?? 0)
       );
-      const driverId = Number.isFinite(queueDriverId) && queueDriverId > 0 ? queueDriverId : undefined;
+      const driverId =
+        Number.isFinite(queueDriverId) && queueDriverId > 0
+          ? queueDriverId
+          : Number.isFinite(parsedDriverIdFromAuthUserId) && parsedDriverIdFromAuthUserId > 0
+            ? parsedDriverIdFromAuthUserId
+            : undefined;
       const routeIds = Array.isArray(payload.route_ids)
         ? payload.route_ids
             .map((entry) => Math.trunc(Number(entry)))

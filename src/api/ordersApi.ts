@@ -404,6 +404,9 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
   const importId = Date.now();
   const authSession = await loadAuthSession().catch(() => null);
   const { driverId, authUserId } = await resolveDriverIdentity(authSession?.userId ?? null);
+  if (!driverId || driverId <= 0) {
+    throw new Error('Não foi possível resolver o motorista da sessão (driver_id). Faça login novamente e tente importar.');
+  }
 
   for (const [clusterIndex, clusterEntry] of clusterEntries.entries()) {
     const routeId = nextRouteId;
@@ -453,6 +456,7 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
     eps_meters: normalizedEps,
     import_id: importId,
     route_ids: routeIds,
+    driver_id: driverId,
     user_id: driverId,
     auth_user_id: authUserId
   });

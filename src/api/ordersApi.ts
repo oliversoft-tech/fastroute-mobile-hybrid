@@ -12,6 +12,7 @@ import {
   replaceLocalRouteWaypoints,
   upsertLocalRoute
 } from '../offline/localDb';
+import { loadAuthSession } from '../utils/authStorage';
 
 interface LocalFile {
   uri: string;
@@ -367,6 +368,9 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
   let { nextRouteId, nextWaypointId } = await getNextIds();
   const createdAt = new Date().toISOString();
   const routeIds: number[] = [];
+  const authSession = await loadAuthSession().catch(() => null);
+  const parsedDriverId = Math.trunc(Number(authSession?.userId ?? 0));
+  const driverId = Number.isFinite(parsedDriverId) && parsedDriverId > 0 ? parsedDriverId : null;
 
   for (const [clusterIndex, clusterEntry] of clusterEntries.entries()) {
     const routeId = nextRouteId;
@@ -414,7 +418,8 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
     file_name: file.name,
     mime_type: file.mimeType ?? 'application/octet-stream',
     eps_meters: normalizedEps,
-    route_ids: routeIds
+    route_ids: routeIds,
+    user_id: driverId
   });
 
   return {

@@ -28,6 +28,7 @@ import {
   updateLocalRouteStatus,
   updateLocalWaypointStatus
 } from './localDb';
+import { loadAuthSession } from '../utils/authStorage';
 
 type SyncTrigger = 'manual' | 'scheduled';
 
@@ -331,6 +332,93 @@ function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoi
   };
 }
 
+function parseJsonObject(value: string) {
+  const trimmed = value.trim();
+  if (
+    !(
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    )
+  ) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function asStructuredRecord(value: unknown): ApiRecord | null {
+  if (typeof value === 'string') {
+    const parsed = parseJsonObject(value);
+    return asRecord(parsed);
+  }
+  return asRecord(value);
+}
+
+function isWaypointOnlyRecord(item: ApiRecord) {
+  const hasWaypointFields =
+    item.seq_order !== undefined ||
+    item.seqorder !== undefined ||
+    item.address_id !== undefined ||
+    item.addressId !== undefined ||
+    item.waypoint_id !== undefined ||
+    item.waypointId !== undefined;
+
+  const hasRouteFields =
+    item.cluster_id !== undefined ||
+    item.clusterId !== undefined ||
+    item.waypoints_count !== undefined ||
+    item.waypointsCount !== undefined ||
+    item.waypoints !== undefined ||
+    item.route_waypoints !== undefined ||
+    item.stops !== undefined ||
+    item.points !== undefined ||
+    item.ativa !== undefined ||
+    item.iniciada_em !== undefined ||
+    item.finalizada_em !== undefined;
+
+  return hasWaypointFields && !hasRouteFields;
+}
+
+function sortWaypoints(waypoints: Waypoint[]) {
+  return [...waypoints].sort((a, b) => a.seq_order - b.seq_order || a.id - b.id);
+}
+
+function mergeRouteDetails(existing: RouteDetail | undefined, incoming: RouteDetail): RouteDetail {
+  const incomingWaypoints = incoming.waypoints ?? [];
+  const existingWaypoints = existing?.waypoints ?? [];
+
+  const mergedWaypointsById = new Map<number, Waypoint>();
+  for (const waypoint of existingWaypoints) {
+    mergedWaypointsById.set(waypoint.id, waypoint);
+  }
+  for (const waypoint of incomingWaypoints) {
+    mergedWaypointsById.set(waypoint.id, waypoint);
+  }
+
+  const mergedWaypoints = sortWaypoints(Array.from(mergedWaypointsById.values()));
+  const mergedCount = Math.max(
+    existing?.waypoints_count ?? 0,
+    incoming.waypoints_count ?? 0,
+    mergedWaypoints.length
+  );
+
+  return {
+    id: incoming.id,
+    cluster_id:
+      incoming.cluster_id || incoming.cluster_id === 0
+        ? incoming.cluster_id
+        : existing?.cluster_id ?? 0,
+    status: incoming.status ?? existing?.status ?? 'PENDENTE',
+    created_at: incoming.created_at ?? existing?.created_at ?? new Date().toISOString(),
+    waypoints_count: mergedCount,
+    waypoints: mergedWaypoints
+  };
+}
+
 async function hydrateRoutesFromLegacyRouteSnapshotEndpoint() {
   const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'), {
     timeout: SYNC_HTTP_TIMEOUT_MS
@@ -345,6 +433,10 @@ async function hydrateRoutesFromLegacyRouteSnapshotEndpoint() {
 function normalizeRoute(raw: unknown): RouteDetail | null {
   const item = asRecord(raw);
   if (!item) {
+    return null;
+  }
+
+  if (isWaypointOnlyRecord(item)) {
     return null;
   }
 
@@ -387,28 +479,94 @@ function extractRoutesFromPullResponse(payload: unknown): RouteDetail[] {
     return directRoutes;
   }
 
-  const changeRoutes = extractArray(root.changes)
-    .flatMap((change) => {
-      const changeRecord = asRecord(change);
-      if (!changeRecord) {
-        return [] as unknown[];
+  const deduplicated = new Map<number, RouteDetail>();
+  for (const route of directRoutes) {
+    deduplicated.set(route.id, route);
+  }
+
+  const changes = extractArray(root.changes)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is ApiRecord => Boolean(entry));
+
+  for (const change of changes) {
+    const entityType = normalizeText(change.entity_type ?? change.entityType);
+    const entityId = toPositiveInt(change.entity_id ?? change.entityId, 0);
+    const payloadRecord = asStructuredRecord(change.payload);
+    const changeCreatedAt = pickString(change.created_at, change.createdAt) ?? new Date().toISOString();
+
+    if (entityType === 'ROUTE') {
+      const routeCandidate = normalizeRoute({
+        ...(payloadRecord ?? {}),
+        id: payloadRecord?.id ?? payloadRecord?.route_id ?? payloadRecord?.routeId ?? entityId,
+        created_at: payloadRecord?.created_at ?? payloadRecord?.createdAt ?? changeCreatedAt
+      });
+
+      if (!routeCandidate) {
+        continue;
       }
 
-      return [
-        changeRecord.route,
-        changeRecord.data,
-        changeRecord.payload,
-        asRecord(changeRecord.payload)?.route,
-        asRecord(changeRecord.data)?.route
-      ].filter((candidate) => candidate !== undefined) as unknown[];
-    })
-    .map((entry) => normalizeRoute(entry))
-    .filter((entry): entry is RouteDetail => Boolean(entry));
+      deduplicated.set(
+        routeCandidate.id,
+        mergeRouteDetails(deduplicated.get(routeCandidate.id), routeCandidate)
+      );
+      continue;
+    }
 
-  const deduplicated = new Map<number, RouteDetail>();
-  [...directRoutes, ...changeRoutes].forEach((route) => {
-    deduplicated.set(route.id, route);
-  });
+    if (entityType === 'ROUTE_WAYPOINT') {
+      const waypointRaw: ApiRecord = {
+        ...(payloadRecord ?? {}),
+        id: payloadRecord?.id ?? payloadRecord?.waypoint_id ?? payloadRecord?.waypointId ?? entityId
+      };
+      const routeId = toPositiveInt(waypointRaw.route_id ?? waypointRaw.routeId, 0);
+      if (!routeId) {
+        continue;
+      }
+
+      const waypoint = normalizeWaypoint(waypointRaw, routeId, 0);
+      if (!waypoint) {
+        continue;
+      }
+
+      const baseRoute = deduplicated.get(routeId) ?? {
+        id: routeId,
+        cluster_id: 0,
+        status: 'PENDENTE' as RouteStatus,
+        created_at: changeCreatedAt,
+        waypoints_count: 0,
+        waypoints: []
+      };
+
+      const mergedWaypointsMap = new Map<number, Waypoint>((baseRoute.waypoints ?? []).map((item) => [item.id, item]));
+      mergedWaypointsMap.set(waypoint.id, waypoint);
+      const mergedWaypoints = sortWaypoints(Array.from(mergedWaypointsMap.values()));
+
+      deduplicated.set(routeId, {
+        ...baseRoute,
+        waypoints: mergedWaypoints,
+        waypoints_count: Math.max(baseRoute.waypoints_count ?? 0, mergedWaypoints.length)
+      });
+      continue;
+    }
+
+    const legacyRouteCandidates = [
+      change.route,
+      change.data,
+      payloadRecord,
+      asStructuredRecord(change.data)?.route,
+      payloadRecord?.route
+    ];
+    for (const candidate of legacyRouteCandidates) {
+      const normalizedCandidate = normalizeRoute(candidate);
+      if (!normalizedCandidate) {
+        continue;
+      }
+      deduplicated.set(
+        normalizedCandidate.id,
+        mergeRouteDetails(deduplicated.get(normalizedCandidate.id), normalizedCandidate)
+      );
+    }
+  }
+
   return Array.from(deduplicated.values());
 }
 
@@ -684,17 +842,21 @@ async function buildMutationsForQueueItem(
       await pushWaypointMutation(
         waypointId,
         'UPDATE',
-        { status: mapQueuedWaypointStatusToServer(payload.status) }
+        {
+          route_id: localWaypoint.route_id,
+          status: mapQueuedWaypointStatusToServer(payload.status)
+        }
       );
       return mutations;
     }
     case 'REORDER_WAYPOINTS': {
+      const routeId = toQueueRouteId(payload);
       const reordered = extractQueuedReorderedWaypoints(payload);
       for (const entry of reordered) {
         await pushWaypointMutation(
           entry.waypoint_id,
           'UPDATE',
-          { seq_order: entry.seqorder, status: 'REORDENADO' }
+          { route_id: routeId ?? undefined, seq_order: entry.seqorder, status: 'REORDENADO' }
         );
       }
       return mutations;
@@ -708,6 +870,11 @@ async function buildMutationsForQueueItem(
       return mutations;
     }
     case 'IMPORT_ROUTE_FILE': {
+      const authSession = await loadAuthSession().catch(() => null);
+      const queueDriverId = Math.trunc(
+        Number(payload.user_id ?? payload.userId ?? payload.driver_id ?? authSession?.userId ?? 0)
+      );
+      const driverId = Number.isFinite(queueDriverId) && queueDriverId > 0 ? queueDriverId : undefined;
       const routeIds = Array.isArray(payload.route_ids)
         ? payload.route_ids
             .map((entry) => Math.trunc(Number(entry)))
@@ -723,6 +890,8 @@ async function buildMutationsForQueueItem(
         const localWaypoints = await listLocalWaypoints(routeId);
         await pushRouteMutation(routeId, 'CREATE', {
           id: routeId,
+          driver_id: driverId,
+          user_id: driverId,
           cluster_id: localRoute.cluster_id ?? null,
           status: mapRouteStatusToServer(localRoute.status),
           created_at: localRoute.created_at ?? new Date().toISOString(),
@@ -734,6 +903,7 @@ async function buildMutationsForQueueItem(
           await pushWaypointMutation(waypoint.id, 'CREATE', {
             id: waypoint.id,
             route_id: routeId,
+            user_id: waypoint.user_id ?? driverId ?? null,
             address_id: waypoint.address_id ?? null,
             seq_order: waypoint.seq_order ?? 0,
             status: mapQueuedWaypointStatusToServer(waypoint.status),

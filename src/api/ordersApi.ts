@@ -13,6 +13,7 @@ import {
   upsertLocalRoute
 } from '../offline/localDb';
 import { loadAuthSession } from '../utils/authStorage';
+import { resolveDriverUserIdFromAuthId } from './supabaseDataApi';
 
 interface LocalFile {
   uri: string;
@@ -311,6 +312,38 @@ async function getNextIds() {
   };
 }
 
+async function resolveDriverIdentity(authUserId?: string | null) {
+  const normalizedAuthUserId = authUserId?.trim() ?? '';
+  const parsedDriverId = Math.trunc(Number(normalizedAuthUserId));
+  if (Number.isFinite(parsedDriverId) && parsedDriverId > 0) {
+    return {
+      authUserId: normalizedAuthUserId,
+      driverId: parsedDriverId
+    };
+  }
+
+  if (!normalizedAuthUserId) {
+    return {
+      authUserId: null,
+      driverId: null
+    };
+  }
+
+  try {
+    const resolved = await resolveDriverUserIdFromAuthId(normalizedAuthUserId);
+    const parsedResolved = Math.trunc(Number(resolved ?? 0));
+    return {
+      authUserId: normalizedAuthUserId,
+      driverId: Number.isFinite(parsedResolved) && parsedResolved > 0 ? parsedResolved : null
+    };
+  } catch {
+    return {
+      authUserId: normalizedAuthUserId,
+      driverId: null
+    };
+  }
+}
+
 export async function importOrders(file: LocalFile): Promise<ImportResult> {
   const parsedEpsMeters = Number(file.epsMeters);
   const normalizedEps = Number.isFinite(parsedEpsMeters) && parsedEpsMeters > 0
@@ -369,8 +402,7 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
   const createdAt = new Date().toISOString();
   const routeIds: number[] = [];
   const authSession = await loadAuthSession().catch(() => null);
-  const parsedDriverId = Math.trunc(Number(authSession?.userId ?? 0));
-  const driverId = Number.isFinite(parsedDriverId) && parsedDriverId > 0 ? parsedDriverId : null;
+  const { driverId, authUserId } = await resolveDriverIdentity(authSession?.userId ?? null);
 
   for (const [clusterIndex, clusterEntry] of clusterEntries.entries()) {
     const routeId = nextRouteId;
@@ -419,7 +451,8 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
     mime_type: file.mimeType ?? 'application/octet-stream',
     eps_meters: normalizedEps,
     route_ids: routeIds,
-    user_id: driverId
+    user_id: driverId,
+    auth_user_id: authUserId
   });
 
   return {

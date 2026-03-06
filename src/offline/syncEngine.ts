@@ -1,7 +1,7 @@
 import { RouteDetail, RouteStatus, Waypoint, WaypointStatus } from '../api/types';
 import { getApiError, getAuthAccessToken, httpClient } from '../api/httpClient';
 import { buildFastRouteApiUrl } from '../config/api';
-import { enrichWaypointsWithAddressData } from '../api/supabaseDataApi';
+import { enrichWaypointsWithAddressData, resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import {
   applyLocalWaypointReorder,
   SyncQueueItem,
@@ -232,6 +232,14 @@ function toPositiveInt(value: unknown, fallback: number) {
   const parsed = Math.trunc(Number(value));
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
+  }
+  return parsed;
+}
+
+function toOptionalPositiveInt(value: unknown): number | null {
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
   }
   return parsed;
 }
@@ -871,31 +879,60 @@ async function buildMutationsForQueueItem(
     }
     case 'IMPORT_ROUTE_FILE': {
       const authSession = await loadAuthSession().catch(() => null);
-      const authUserIdFromSession = String(authSession?.userId ?? '').trim();
-      const authUserIdFromPayload = String(payload.auth_user_id ?? payload.authUserId ?? '').trim();
-      const authUserId = authUserIdFromPayload || authUserIdFromSession || undefined;
-      const parsedDriverIdFromAuthUserId = Math.trunc(Number(authUserIdFromPayload || authUserIdFromSession || 0));
-      const queueDriverId = Math.trunc(
-        Number(payload.user_id ?? payload.userId ?? payload.driver_id ?? authSession?.userId ?? 0)
-      );
-      const driverId =
-        Number.isFinite(queueDriverId) && queueDriverId > 0
-          ? queueDriverId
-          : Number.isFinite(parsedDriverIdFromAuthUserId) && parsedDriverIdFromAuthUserId > 0
-            ? parsedDriverIdFromAuthUserId
-            : undefined;
+      const authUserIdFromSession = pickString(authSession?.userId) ?? null;
+      const authUserIdFromPayload = pickString(payload.auth_user_id, payload.authUserId) ?? null;
+      const authUserId = authUserIdFromPayload ?? authUserIdFromSession;
       const routeIds = Array.isArray(payload.route_ids)
         ? payload.route_ids
             .map((entry) => Math.trunc(Number(entry)))
             .filter((routeId) => Number.isFinite(routeId) && routeId > 0)
         : [];
-      const importIdFromPayload = Math.trunc(Number(payload.import_id ?? payload.importId ?? 0));
+      if (routeIds.length === 0) {
+        const routeId = toQueueRouteId(payload);
+        if (routeId) {
+          routeIds.push(routeId);
+        }
+      }
+
+      if (routeIds.length === 0) {
+        throw new Error('Falha no sync: payload de IMPORT_ROUTE_FILE sem route_ids válidos.');
+      }
+
+      let driverId =
+        toOptionalPositiveInt(payload.driver_id) ??
+        toOptionalPositiveInt(payload.driverId) ??
+        toOptionalPositiveInt(payload.user_id) ??
+        toOptionalPositiveInt(payload.userId) ??
+        toOptionalPositiveInt(authSession?.userId) ??
+        toOptionalPositiveInt(authUserId);
+
+      if (!driverId && authUserId) {
+        try {
+          const resolvedDriverId = await resolveDriverUserIdFromAuthId(authUserId);
+          driverId = toOptionalPositiveInt(resolvedDriverId);
+        } catch (error) {
+          throw new Error(`Falha no sync: erro ao resolver driver_id via auth_user_id: ${getApiError(error)}`);
+        }
+      }
+
+      const importIdFromPayload =
+        toOptionalPositiveInt(payload.import_id) ?? toOptionalPositiveInt(payload.importId);
       const importId =
-        Number.isFinite(importIdFromPayload) && importIdFromPayload > 0
+        importIdFromPayload && importIdFromPayload > 0
           ? importIdFromPayload
           : routeIds.length > 0
             ? routeIds[0]
-            : undefined;
+            : null;
+
+      if (!importId) {
+        throw new Error('Falha no sync: payload de IMPORT_ROUTE_FILE sem import_id válido para route CREATE.');
+      }
+
+      if (!driverId) {
+        throw new Error(
+          'Falha no sync: payload de rota incompleto para sync CREATE: coluna obrigatória ausente (driver_id).'
+        );
+      }
 
       for (const routeId of routeIds) {
         const localRoute = await getLocalRoute(routeId);
@@ -904,13 +941,18 @@ async function buildMutationsForQueueItem(
         }
 
         const localWaypoints = await listLocalWaypoints(routeId);
+        const routeClusterId =
+          toOptionalPositiveInt(localRoute.cluster_id) ??
+          toOptionalPositiveInt(payload.cluster_id) ??
+          toOptionalPositiveInt(payload.clusterId) ??
+          1;
         await pushRouteMutation(routeId, 'CREATE', {
           id: routeId,
           import_id: importId,
           driver_id: driverId,
           user_id: driverId,
-          auth_user_id: authUserId,
-          cluster_id: localRoute.cluster_id ?? null,
+          auth_user_id: authUserId ?? undefined,
+          cluster_id: routeClusterId,
           status: mapRouteStatusToServer(localRoute.status),
           created_at: localRoute.created_at ?? new Date().toISOString(),
           waypoints_count: localWaypoints.length,

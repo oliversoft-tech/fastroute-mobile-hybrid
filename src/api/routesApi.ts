@@ -5,6 +5,7 @@ import * as FileSystem from 'expo-file-system';
 import { RouteDetail, Waypoint, WaypointStatus } from './types';
 import {
   applyLocalWaypointReorder,
+  backfillLocalWaypointTitlesByAddress,
   deleteLocalRoute,
   enqueueSyncOperation,
   getLocalDb,
@@ -216,7 +217,13 @@ export async function getRouteDetails(routeId: number, _options?: QueryCacheOpti
 
 export async function listRouteWaypoints(routeId: number, _options?: QueryCacheOptions) {
   await ensureE2ESeedData();
-  const waypoints = await listLocalWaypoints(routeId);
+  let waypoints = await listLocalWaypoints(routeId);
+  const needsLocalBackfill = waypoints.some((waypoint) => !hasDetailedWaypointTitle(waypoint.title));
+  if (needsLocalBackfill) {
+    await backfillLocalWaypointTitlesByAddress(routeId);
+    waypoints = await listLocalWaypoints(routeId);
+  }
+
   const needsAddressEnrichment = waypoints.some((waypoint) => !hasDetailedWaypointTitle(waypoint.title));
   if (!needsAddressEnrichment) {
     return waypoints;

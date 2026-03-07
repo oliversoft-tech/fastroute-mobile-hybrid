@@ -378,6 +378,45 @@ export async function listLocalWaypoints(routeId: number): Promise<Waypoint[]> {
   }));
 }
 
+export async function backfillLocalWaypointTitlesByAddress(routeId: number) {
+  const db = await getLocalDb();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `UPDATE waypoints
+     SET title = COALESCE(
+           NULLIF(TRIM(title), ''),
+           (
+             SELECT source.title
+             FROM waypoints AS source
+             WHERE source.address_id = waypoints.address_id
+               AND source.id <> waypoints.id
+               AND source.title IS NOT NULL
+               AND TRIM(source.title) <> ''
+             ORDER BY datetime(source.updated_at) DESC, source.id DESC
+             LIMIT 1
+           )
+         ),
+         subtitle = COALESCE(
+           NULLIF(TRIM(subtitle), ''),
+           (
+             SELECT source.subtitle
+             FROM waypoints AS source
+             WHERE source.address_id = waypoints.address_id
+               AND source.id <> waypoints.id
+               AND source.subtitle IS NOT NULL
+               AND TRIM(source.subtitle) <> ''
+             ORDER BY datetime(source.updated_at) DESC, source.id DESC
+             LIMIT 1
+           )
+         ),
+         updated_at = ?
+     WHERE route_id = ?
+       AND (title IS NULL OR TRIM(title) = '')`,
+    now,
+    routeId
+  );
+}
+
 export async function getLocalWaypoint(waypointId: number): Promise<Waypoint | null> {
   const db = await getLocalDb();
   const row = await db.getFirstAsync<WaypointRow>(

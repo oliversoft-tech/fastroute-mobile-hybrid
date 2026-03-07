@@ -307,7 +307,8 @@ function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoi
     return null;
   }
 
-  const seqOrder = toPositiveInt(item.seq_order ?? item.seqorder ?? item.seqOrder, index + 1);
+  const fallbackSeqOrder = index >= 0 ? index + 1 : 0;
+  const seqOrder = toPositiveInt(item.seq_order ?? item.seqorder ?? item.seqOrder, fallbackSeqOrder);
   const latitude = toNullableNumber(item.latitude ?? item.lat ?? address?.latitude ?? address?.lat);
   const longitude = toNullableNumber(
     item.longitude ??
@@ -319,10 +320,12 @@ function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoi
       address?.long
   );
 
+  const fallbackAddressId = index >= 0 ? id : 0;
+
   return {
     id,
     route_id: toPositiveInt(item.route_id ?? item.routeId, routeId),
-    address_id: toPositiveInt(item.address_id ?? item.addressId ?? address?.id, id),
+    address_id: toPositiveInt(item.address_id ?? item.addressId ?? address?.id, fallbackAddressId),
     user_id: toNullableNumber(item.user_id ?? item.userId),
     seq_order: seqOrder,
     status: normalizeWaypointStatus(item.status),
@@ -395,6 +398,32 @@ function sortWaypoints(waypoints: Waypoint[]) {
   return [...waypoints].sort((a, b) => a.seq_order - b.seq_order || a.id - b.id);
 }
 
+function mergeWaypointDetails(existing: Waypoint | undefined, incoming: Waypoint): Waypoint {
+  const incomingAddressId = toOptionalPositiveInt(incoming.address_id);
+  const existingAddressId = toOptionalPositiveInt(existing?.address_id);
+  const incomingSeqOrder = toOptionalPositiveInt(incoming.seq_order);
+  const existingSeqOrder = toOptionalPositiveInt(existing?.seq_order);
+  const incomingTitle = pickString(incoming.title);
+  const existingTitle = pickString(existing?.title);
+  const incomingSubtitle = pickString(incoming.subtitle);
+  const existingSubtitle = pickString(existing?.subtitle);
+  const incomingLatitude = toNullableNumber(incoming.latitude);
+  const existingLatitude = toNullableNumber(existing?.latitude);
+  const incomingLongitude = toNullableNumber(incoming.longitude);
+  const existingLongitude = toNullableNumber(existing?.longitude);
+
+  return {
+    ...incoming,
+    address_id: incomingAddressId ?? existingAddressId ?? 0,
+    user_id: incoming.user_id ?? existing?.user_id,
+    seq_order: incomingSeqOrder ?? existingSeqOrder ?? 0,
+    title: incomingTitle ?? existingTitle,
+    subtitle: incomingSubtitle ?? existingSubtitle,
+    latitude: incomingLatitude ?? existingLatitude,
+    longitude: incomingLongitude ?? existingLongitude
+  };
+}
+
 function mergeRouteDetails(existing: RouteDetail | undefined, incoming: RouteDetail): RouteDetail {
   const incomingWaypoints = incoming.waypoints ?? [];
   const existingWaypoints = existing?.waypoints ?? [];
@@ -404,7 +433,7 @@ function mergeRouteDetails(existing: RouteDetail | undefined, incoming: RouteDet
     mergedWaypointsById.set(waypoint.id, waypoint);
   }
   for (const waypoint of incomingWaypoints) {
-    mergedWaypointsById.set(waypoint.id, waypoint);
+    mergedWaypointsById.set(waypoint.id, mergeWaypointDetails(mergedWaypointsById.get(waypoint.id), waypoint));
   }
 
   const mergedWaypoints = sortWaypoints(Array.from(mergedWaypointsById.values()));
@@ -530,7 +559,7 @@ function extractRoutesFromPullResponse(payload: unknown): RouteDetail[] {
         continue;
       }
 
-      const waypoint = normalizeWaypoint(waypointRaw, routeId, 0);
+      const waypoint = normalizeWaypoint(waypointRaw, routeId, -1);
       if (!waypoint) {
         continue;
       }
@@ -545,7 +574,7 @@ function extractRoutesFromPullResponse(payload: unknown): RouteDetail[] {
       };
 
       const mergedWaypointsMap = new Map<number, Waypoint>((baseRoute.waypoints ?? []).map((item) => [item.id, item]));
-      mergedWaypointsMap.set(waypoint.id, waypoint);
+      mergedWaypointsMap.set(waypoint.id, mergeWaypointDetails(mergedWaypointsMap.get(waypoint.id), waypoint));
       const mergedWaypoints = sortWaypoints(Array.from(mergedWaypointsMap.values()));
 
       deduplicated.set(routeId, {
@@ -589,6 +618,9 @@ function hasDetailedAddressTitle(title: unknown) {
   }
 
   const normalized = normalizeText(trimmed);
+  if (/^ENDERECO\s+\d+$/.test(normalized) || /^WAYPOINT\s*#?\s*\d+$/.test(normalized)) {
+    return false;
+  }
   return normalized !== 'ENDERECO NAO INFORMADO';
 }
 

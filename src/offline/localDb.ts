@@ -270,14 +270,20 @@ export async function mergeRouteSnapshot(routes: RouteDetail[]) {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             route_id = excluded.route_id,
-            address_id = excluded.address_id,
-            user_id = excluded.user_id,
-            seq_order = excluded.seq_order,
+            address_id = CASE
+              WHEN excluded.address_id IS NULL OR excluded.address_id <= 0 THEN waypoints.address_id
+              ELSE excluded.address_id
+            END,
+            user_id = COALESCE(excluded.user_id, waypoints.user_id),
+            seq_order = CASE
+              WHEN excluded.seq_order IS NULL OR excluded.seq_order <= 0 THEN waypoints.seq_order
+              ELSE excluded.seq_order
+            END,
             status = excluded.status,
-            title = excluded.title,
-            subtitle = excluded.subtitle,
-            latitude = excluded.latitude,
-            longitude = excluded.longitude,
+            title = COALESCE(NULLIF(TRIM(excluded.title), ''), waypoints.title),
+            subtitle = COALESCE(NULLIF(TRIM(excluded.subtitle), ''), waypoints.subtitle),
+            latitude = COALESCE(excluded.latitude, waypoints.latitude),
+            longitude = COALESCE(excluded.longitude, waypoints.longitude),
             updated_at = excluded.updated_at`,
           waypoint.id,
           waypoint.route_id || route.id,

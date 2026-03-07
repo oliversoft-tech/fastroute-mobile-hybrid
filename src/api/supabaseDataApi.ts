@@ -293,10 +293,16 @@ export async function enrichWaypointsWithAddressData(waypoints: Waypoint[]): Pro
       return waypoint;
     }
 
+    const normalizedTitle = String(waypoint.title ?? '')
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase();
     const hasValidTitle =
-      typeof waypoint.title === 'string' &&
-      waypoint.title.trim().length > 0 &&
-      waypoint.title.trim().toLowerCase() !== 'endereço não informado';
+      normalizedTitle.length > 0 &&
+      normalizedTitle !== 'ENDERECO NAO INFORMADO' &&
+      !/^ENDERECO\s+\d+$/.test(normalizedTitle) &&
+      !/^WAYPOINT\s*#?\s*\d+$/.test(normalizedTitle);
 
     return {
       ...waypoint,

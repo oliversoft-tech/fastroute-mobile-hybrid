@@ -20,6 +20,7 @@ import {
   updateLocalWaypointStatus,
   upsertLocalRoute
 } from '../offline/localDb';
+import { enrichWaypointsWithAddressData } from './supabaseDataApi';
 import { ensureE2ESeedData } from '../e2e/seedData';
 
 interface QueryCacheOptions {
@@ -138,6 +139,32 @@ function isWaypointDeliveredStatus(status: string | WaypointStatus | undefined) 
   return normalized.includes('ENTREGUE') || normalized.includes('CONCLUID');
 }
 
+function hasDetailedWaypointTitle(title: unknown) {
+  if (typeof title !== 'string') {
+    return false;
+  }
+
+  const normalized = title
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized === 'ENDERECO NAO INFORMADO') {
+    return false;
+  }
+
+  if (/^ENDERECO\s+\d+$/.test(normalized) || /^WAYPOINT\s*#?\s*\d+$/.test(normalized)) {
+    return false;
+  }
+
+  return true;
+}
+
 function ensureWaypointPhotoDirectory() {
   const documentDirectory = FileSystem.documentDirectory;
   if (!documentDirectory) {
@@ -179,7 +206,7 @@ export async function getRouteDetails(routeId: number, _options?: QueryCacheOpti
   if (!route) {
     throw new Error(`Rota #${routeId} não encontrada.`);
   }
-  const waypoints = await listLocalWaypoints(routeId);
+  const waypoints = await listRouteWaypoints(routeId, _options);
   return {
     ...route,
     waypoints_count: waypoints.length,
@@ -189,7 +216,36 @@ export async function getRouteDetails(routeId: number, _options?: QueryCacheOpti
 
 export async function listRouteWaypoints(routeId: number, _options?: QueryCacheOptions) {
   await ensureE2ESeedData();
-  return listLocalWaypoints(routeId);
+  const waypoints = await listLocalWaypoints(routeId);
+  const needsAddressEnrichment = waypoints.some((waypoint) => !hasDetailedWaypointTitle(waypoint.title));
+  if (!needsAddressEnrichment) {
+    return waypoints;
+  }
+
+  try {
+    const enriched = await enrichWaypointsWithAddressData(waypoints);
+    const wasEnriched = enriched.some((waypoint, index) => {
+      const original = waypoints[index];
+      if (!original) {
+        return false;
+      }
+
+      return (
+        waypoint.title !== original.title ||
+        waypoint.subtitle !== original.subtitle ||
+        waypoint.latitude !== original.latitude ||
+        waypoint.longitude !== original.longitude
+      );
+    });
+
+    if (wasEnriched) {
+      await replaceLocalRouteWaypoints(routeId, enriched);
+    }
+
+    return enriched;
+  } catch {
+    return waypoints;
+  }
 }
 
 export async function startRoute(routeId: number) {

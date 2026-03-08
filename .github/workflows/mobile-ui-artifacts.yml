@@ -1,0 +1,146 @@
+name: Mobile UI Artifacts
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      mobile_ref:
+        description: "Ref (branch/tag/SHA) para build de artefatos UI"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  android-apk:
+    name: Build Android APK (UI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TARGET_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || (github.event_name == 'workflow_dispatch' && inputs.mobile_ref || github.sha) }}
+      EXPO_PUBLIC_E2E_BYPASS_LOGIN: "1"
+      EXPO_PUBLIC_E2E_SEED_DATA: "1"
+      EXPO_PUBLIC_E2E_NAV_CRAWLER: "1"
+
+    steps:
+      - name: Checkout mobile
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_REF }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build debug APK
+        run: |
+          set -euo pipefail
+          if [ ! -d android ]; then
+            npx expo prebuild --platform android --non-interactive --no-install
+          fi
+          cd android
+          ./gradlew assembleDebug -x lint -x test
+
+      - name: Prepare artifact payload
+        run: |
+          set -euo pipefail
+          APK_PATH="$(find android/app/build/outputs/apk/debug -type f -name 'app-debug.apk' | head -n1 || true)"
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "APK debug não encontrado." >&2
+            exit 1
+          fi
+          mkdir -p .artifacts/android
+          cp "$APK_PATH" .artifacts/android/app-debug.apk
+          echo "${TARGET_REF}" > .artifacts/android/mobile-ref.txt
+          git rev-parse HEAD > .artifacts/android/mobile-sha.txt
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ui-android-apk
+          path: .artifacts/android
+          if-no-files-found: error
+
+  ios-simulator-app:
+    name: Build iOS Simulator App (UI)
+    runs-on: macos-latest
+    timeout-minutes: 35
+    env:
+      TARGET_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || (github.event_name == 'workflow_dispatch' && inputs.mobile_ref || github.sha) }}
+      EXPO_PUBLIC_E2E_BYPASS_LOGIN: "1"
+      EXPO_PUBLIC_E2E_SEED_DATA: "1"
+      EXPO_PUBLIC_E2E_NAV_CRAWLER: "1"
+      IOS_SCHEME: FastRoute
+      IOS_CONFIGURATION: Release
+
+    steps:
+      - name: Checkout mobile
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_REF }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install CocoaPods
+        run: |
+          set -euo pipefail
+          cd ios
+          pod install --silent
+
+      - name: Build iOS simulator app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace ios/FastRoute.xcworkspace \
+            -scheme "${IOS_SCHEME}" \
+            -configuration "${IOS_CONFIGURATION}" \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath .derived-data-ui \
+            build
+
+      - name: Prepare artifact payload
+        run: |
+          set -euo pipefail
+          APP_PATH=".derived-data-ui/Build/Products/${IOS_CONFIGURATION}-iphonesimulator/FastRoute.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App iOS simulator não encontrada em $APP_PATH" >&2
+            exit 1
+          fi
+          mkdir -p .artifacts/ios
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" ".artifacts/ios/FastRoute.app.zip"
+          echo "${TARGET_REF}" > .artifacts/ios/mobile-ref.txt
+          git rev-parse HEAD > .artifacts/ios/mobile-sha.txt
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ui-ios-simulator-app
+          path: .artifacts/ios
+          if-no-files-found: error

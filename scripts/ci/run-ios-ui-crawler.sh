@@ -11,6 +11,7 @@ CRAWLER_STATUS_KEY="e2e_ios_crawler_status"
 LOG_DIR="${IOS_CRAWLER_LOG_DIR:-$ROOT_DIR/.e2e/ios-crawler}"
 STATUS_FILE="$LOG_DIR/status.log"
 SYSLOG_FILE="$LOG_DIR/system.log"
+IOS_APP_PATH="${IOS_APP_PATH:-}"
 
 mkdir -p "$LOG_DIR"
 rm -f "$STATUS_FILE" "$SYSLOG_FILE"
@@ -57,9 +58,19 @@ export EXPO_PUBLIC_E2E_BYPASS_LOGIN=1
 export EXPO_PUBLIC_E2E_SEED_DATA=1
 export EXPO_PUBLIC_E2E_NAV_CRAWLER=1
 
-echo "Building and installing iOS app with E2E crawler mode enabled..."
-IOS_SIMULATOR_ID="$SIM_ID" IOS_SIMULATOR_NAME="$SIMULATOR_NAME" IOS_CONFIGURATION=Debug \
-  bash ./scripts/build-install-ios-local.sh
+if [[ -n "$IOS_APP_PATH" ]]; then
+  if [[ ! -d "$IOS_APP_PATH" ]]; then
+    echo "IOS_APP_PATH não encontrado: $IOS_APP_PATH" >&2
+    exit 1
+  fi
+  echo "Installing prebuilt iOS app from artifact: $IOS_APP_PATH"
+  xcrun simctl install "$SIM_ID" "$IOS_APP_PATH"
+  xcrun simctl launch "$SIM_ID" "$BUNDLE_ID" >/dev/null 2>&1 || true
+else
+  echo "Building and installing iOS app with E2E crawler mode enabled..."
+  IOS_SIMULATOR_ID="$SIM_ID" IOS_SIMULATOR_NAME="$SIMULATOR_NAME" IOS_CONFIGURATION=Debug \
+    bash ./scripts/build-install-ios-local.sh
+fi
 
 echo "Waiting crawler status in local database (timeout ${CRAWLER_TIMEOUT_SECONDS}s)..."
 deadline=$(( $(date +%s) + CRAWLER_TIMEOUT_SECONDS ))

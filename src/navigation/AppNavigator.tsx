@@ -1,4 +1,5 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { RootStackParamList } from './types';
 import { LoginScreen } from '../screens/LoginScreen';
@@ -12,11 +13,28 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 import { ImportRoutesScreen } from '../screens/ImportRoutesScreen';
 import { colors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
+import { isE2ENavigationCrawlerEnabled, runE2ENavigationCrawler } from '../e2e/navigationCrawler';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function AppNavigator() {
   const { userEmail, isReady } = useAuth();
+  const crawlerStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isE2ENavigationCrawlerEnabled()) {
+      return;
+    }
+
+    if (!isReady || !userEmail || crawlerStartedRef.current) {
+      return;
+    }
+
+    crawlerStartedRef.current = true;
+    void runE2ENavigationCrawler().catch((error) => {
+      console.warn('[E2E_IOS_CRAWLER] Falha na execução:', error);
+    });
+  }, [isReady, userEmail]);
 
   if (!isReady) {
     return (

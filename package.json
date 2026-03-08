@@ -19,6 +19,7 @@
     "test:unit": "bash ./scripts/ci/run-unit-tests.sh",
     "test:functional:android": "bash ./scripts/ci/run-maestro-tests.sh android",
     "test:functional:ios": "bash ./scripts/ci/run-maestro-tests.sh ios",
+    "test:ui:ios:crawler": "bash ./scripts/ci/run-ios-ui-crawler.sh",
     "test:regression": "npm run test:unit"
   },
   "dependencies": {

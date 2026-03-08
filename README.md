@@ -62,3 +62,12 @@ Refresh de token via Supabase SDK:
 - Execução local:
   - `npm run test:functional:android`
   - `npm run test:functional:ios`
+
+## Testes de UI (iOS crawler sem Maestro)
+
+- Runner: `scripts/ci/run-ios-ui-crawler.sh`
+- Script npm: `npm run test:ui:ios:crawler`
+- O crawler navega automaticamente pelas telas principais da stack (`Routes`, `Settings`, `ImportRoute`, `FileBrowser`, `ImportRoutes`, `RouteDetail`, `Map`, `Delivery`).
+- Resultado persistido em SQLite (`app_settings`):
+  - chave: `e2e_ios_crawler_status`
+  - valores: `running`, `success`, `failed:<motivo>`

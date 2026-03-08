@@ -4,10 +4,7 @@ import { navigationRef } from '../navigation/navigationRef';
 import { RootStackParamList } from '../navigation/types';
 import { setAppSetting } from '../offline/localDb';
 
-const runtimeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } })
-  .process;
-
-const CRAWLER_FLAG_KEY = 'EXPO_PUBLIC_E2E_NAV_CRAWLER';
+const runtimeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
 const CRAWLER_STATUS_KEY = 'e2e_ios_crawler_status';
 const CRAWLER_LOG_PREFIX = '[E2E_IOS_CRAWLER]';
 
@@ -134,7 +131,10 @@ async function navigateStep<TName extends keyof RootStackParamList>(
 }
 
 export function isE2ENavigationCrawlerEnabled() {
-  return parseBooleanEnv(runtimeProcess?.env?.[CRAWLER_FLAG_KEY], false);
+  return parseBooleanEnv(
+    process.env.EXPO_PUBLIC_E2E_NAV_CRAWLER ?? runtimeProcess?.env?.EXPO_PUBLIC_E2E_NAV_CRAWLER,
+    false
+  );
 }
 
 export async function runE2ENavigationCrawler() {

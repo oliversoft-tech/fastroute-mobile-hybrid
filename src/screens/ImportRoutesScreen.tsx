@@ -2,15 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 import { deleteRoute, listRoutes } from '../api/routesApi';
@@ -30,13 +33,17 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [deletingRouteId, setDeletingRouteId] = useState<number | null>(null);
+  const [clearingImport, setClearingImport] = useState(false);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [routeIdPendingDelete, setRouteIdPendingDelete] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
 
-  const importedRouteIdSet = useMemo(() => {
-    const normalizedIds = (route.params.routeIds ?? [])
+  const importedRouteIds = useMemo(() => {
+    return (route.params.routeIds ?? [])
       .map((value) => Math.trunc(Number(value)))
       .filter((value) => Number.isFinite(value) && value > 0);
-    return new Set(normalizedIds);
   }, [route.params.routeIds]);
+  const importedRouteIdSet = useMemo(() => new Set(importedRouteIds), [importedRouteIds]);
 
   const loadRoutes = useCallback(async (options?: { forceRefresh?: boolean }) => {
     try {
@@ -72,25 +79,82 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
   };
 
   const onDeleteRoute = (routeId: number) => {
+    setRouteIdPendingDelete(routeId);
+    setCancelReason('');
+    setDeleteModalVisible(true);
+  };
+
+  const onConfirmDeleteRoute = () => {
+    const targetRouteId = routeIdPendingDelete;
+    if (!targetRouteId) {
+      return;
+    }
+
+    const trimmedReason = cancelReason.trim();
+    if (!trimmedReason) {
+      Alert.alert('Justificativa obrigatória', 'Informe a justificativa para cancelar a rota.');
+      return;
+    }
+
+    setDeleteModalVisible(false);
+    void (async () => {
+      try {
+        setDeletingRouteId(targetRouteId);
+        await deleteRoute(targetRouteId, trimmedReason);
+        await loadRoutes({ forceRefresh: true });
+        Alert.alert('Rota excluída', `Rota #${targetRouteId} removida com sucesso.`);
+      } catch (error) {
+        Alert.alert('Falha ao excluir rota', getApiError(error));
+      } finally {
+        setDeletingRouteId(null);
+        setRouteIdPendingDelete(null);
+      }
+    })();
+  };
+
+  const onClearImport = () => {
+    if (importedRouteIds.length === 0) {
+      Alert.alert('Importação vazia', 'Não há rotas importadas para remover.');
+      return;
+    }
+
     Alert.alert(
-      'Excluir rota',
-      `Deseja excluir a rota #${routeId}?`,
+      'Limpar importação',
+      `Deseja remover ${importedRouteIds.length} rota(s) importada(s)?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Excluir',
+          text: 'Limpar',
           style: 'destructive',
           onPress: () => {
             void (async () => {
               try {
-                setDeletingRouteId(routeId);
-                await deleteRoute(routeId);
+                setClearingImport(true);
+                const failedRouteIds: number[] = [];
+
+                for (const routeId of importedRouteIds) {
+                  try {
+                    await deleteRoute(routeId);
+                  } catch {
+                    failedRouteIds.push(routeId);
+                  }
+                }
+
                 await loadRoutes({ forceRefresh: true });
-                Alert.alert('Rota excluída', `Rota #${routeId} removida com sucesso.`);
+
+                if (failedRouteIds.length === 0) {
+                  navigation.navigate('Routes');
+                  return;
+                }
+
+                Alert.alert(
+                  'Limpeza parcial',
+                  `Não foi possível remover ${failedRouteIds.length} rota(s).`
+                );
               } catch (error) {
-                Alert.alert('Falha ao excluir rota', getApiError(error));
+                Alert.alert('Falha ao limpar importação', getApiError(error));
               } finally {
-                setDeletingRouteId(null);
+                setClearingImport(false);
               }
             })();
           }
@@ -100,9 +164,8 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
   };
 
   const routeStats = useMemo(() => {
-    const pending = routes.filter((entry) => entry.status === 'PENDENTE' || entry.status === 'CRIADA').length;
     const active = routes.filter((entry) => entry.status === 'EM_ROTA' || entry.status === 'EM_ANDAMENTO').length;
-    return { total: routes.length, pending, active };
+    return { total: routes.length, active };
   }, [routes]);
 
   return (
@@ -111,30 +174,30 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
       <View style={styles.headerCard}>
+        <View style={styles.headerTopActions}>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => void logout()}
+            accessibilityRole="button"
+            accessibilityLabel="Sair"
+          >
+            <Ionicons name="log-out-outline" size={20} color={colors.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => navigation.navigate('Settings')}
+            accessibilityRole="button"
+            accessibilityLabel="Configurações"
+          >
+            <Ionicons name="settings-outline" size={20} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
         <View>
           <Text style={styles.headerTitle}>Rotas da Importação</Text>
-          <Text style={styles.headerSubtitle}>Import {routeStats.total} • {routeStats.pending} pendentes</Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity onPress={() => navigation.navigate('Settings')}>
-            <Text style={styles.settings}>Config</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => void logout()}>
-            <Text style={styles.logout}>Sair</Text>
-          </TouchableOpacity>
         </View>
       </View>
 
       <Text style={styles.driver}>Motorista: {userEmail}</Text>
-
-      <View style={styles.badgesRow}>
-        <View style={styles.badgePill}>
-          <Text style={styles.badgePillText}>Motorista Demo</Text>
-        </View>
-        <View style={styles.badgePill}>
-          <Text style={styles.badgePillText}>OliverSoft - Coimbra</Text>
-        </View>
-      </View>
 
       <View style={styles.statsCard}>
         <Text style={styles.statsTitle}>Hoje</Text>
@@ -144,8 +207,13 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
       </View>
 
       <View style={styles.createCard}>
-        <Text style={styles.createTitle}>Criar rota por importação</Text>
-        <PrimaryButton label="Criar Rota" onPress={() => navigation.navigate('ImportRoute')} />
+        <PrimaryButton
+          label="Limpar Importação"
+          variant="danger"
+          onPress={onClearImport}
+          disabled={clearingImport || importedRouteIds.length === 0}
+          loading={clearingImport}
+        />
       </View>
 
       {loading ? (
@@ -165,13 +233,15 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
           >
             <View style={styles.routeTitleRow}>
               <View style={styles.routeTitleColumn}>
-                <Text style={styles.routeTitle}>Rota #{entry.id}</Text>
+                <View style={styles.routeTitleLine}>
+                  <Text style={styles.routeTitle}>Rota #{entry.id}</Text>
+                  <StatusBadge status={entry.status} type="route" />
+                </View>
                 <Text style={styles.routeMeta}>
                   {entry.waypoints_count ?? entry.waypoints?.length ?? 0} waypoints • Criada em {formatDate(entry.created_at)}
                 </Text>
               </View>
               <View style={styles.routeActions}>
-                <StatusBadge status={entry.status} type="route" />
                 <TouchableOpacity
                   style={[
                     styles.deleteRouteButton,
@@ -179,12 +249,12 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
                   ]}
                   onPress={(event) => {
                     event.stopPropagation();
-                    if (deletingRouteId !== null) {
+                    if (deletingRouteId !== null || clearingImport) {
                       return;
                     }
                     onDeleteRoute(entry.id);
                   }}
-                  disabled={deletingRouteId !== null}
+                  disabled={deletingRouteId !== null || clearingImport}
                   accessibilityRole="button"
                   accessibilityLabel={`Excluir rota ${entry.id}`}
                 >
@@ -195,6 +265,46 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         ))
       )}
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={deleteModalVisible}
+        onRequestClose={() => setDeleteModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Cancelar rota</Text>
+            <Text style={styles.modalText}>
+              Confirme o cancelamento da rota #{routeIdPendingDelete ?? '-'}.
+            </Text>
+            <TextInput
+              value={cancelReason}
+              onChangeText={setCancelReason}
+              placeholder="Justificativa"
+              placeholderTextColor={colors.textSecondary}
+              multiline
+              textAlignVertical="top"
+              style={styles.justificationInput}
+            />
+            <View style={styles.modalActions}>
+              <PrimaryButton
+                label="Cancelar"
+                variant="neutral"
+                onPress={() => setDeleteModalVisible(false)}
+                style={styles.modalAction}
+              />
+              <PrimaryButton
+                label="Excluir"
+                variant="danger"
+                onPress={onConfirmDeleteRoute}
+                loading={deletingRouteId === routeIdPendingDelete}
+                style={styles.modalAction}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -206,59 +316,37 @@ const styles = StyleSheet.create({
     paddingBottom: 22
   },
   headerCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     backgroundColor: colors.card,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 14
+    padding: 14,
+    gap: 8
+  },
+  headerTopActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F6F9FF'
   },
   headerTitle: {
     color: colors.textPrimary,
     fontWeight: '800',
     fontSize: 18
   },
-  headerSubtitle: {
-    color: colors.textSecondary,
-    marginTop: 3,
-    fontSize: 12
-  },
-  logout: {
-    color: colors.primary,
-    fontWeight: '700'
-  },
-  headerActions: {
-    alignItems: 'flex-end',
-    gap: 10
-  },
-  settings: {
-    color: colors.primary,
-    fontWeight: '700'
-  },
   driver: {
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '600'
-  },
-  badgesRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8
-  },
-  badgePill: {
-    borderWidth: 1,
-    borderColor: '#D0DAEE',
-    backgroundColor: '#F1F6FF',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5
-  },
-  badgePillText: {
-    color: colors.primaryDark,
-    fontSize: 11,
-    fontWeight: '700'
   },
   statsCard: {
     borderRadius: 14,
@@ -281,13 +369,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 14,
-    gap: 10
-  },
-  createTitle: {
-    color: colors.textPrimary,
-    fontWeight: '700',
-    marginBottom: 2
+    padding: 14
   },
   loaderContainer: {
     paddingVertical: 24,
@@ -318,6 +400,11 @@ const styles = StyleSheet.create({
   },
   routeTitleColumn: {
     flex: 1
+  },
+  routeTitleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
   },
   routeActions: {
     flexDirection: 'row',
@@ -351,5 +438,45 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '600',
     marginTop: 4
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(16, 24, 40, 0.6)',
+    justifyContent: 'center',
+    padding: 16
+  },
+  modalCard: {
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14
+  },
+  modalTitle: {
+    color: colors.textPrimary,
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: 10
+  },
+  modalText: {
+    color: colors.textSecondary,
+    marginBottom: 12
+  },
+  justificationInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: colors.textPrimary,
+    marginBottom: 12
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  modalAction: {
+    flex: 1
   }
 });

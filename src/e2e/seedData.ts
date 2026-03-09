@@ -23,8 +23,14 @@ function parseBooleanEnv(value: string | undefined, defaultValue: boolean) {
   return defaultValue;
 }
 
-const E2E_BYPASS_LOGIN = parseBooleanEnv(runtimeProcess?.env?.EXPO_PUBLIC_E2E_BYPASS_LOGIN, false);
-const E2E_SEED_DATA = parseBooleanEnv(runtimeProcess?.env?.EXPO_PUBLIC_E2E_SEED_DATA, E2E_BYPASS_LOGIN);
+const E2E_BYPASS_LOGIN = parseBooleanEnv(
+  process.env.EXPO_PUBLIC_E2E_BYPASS_LOGIN ?? runtimeProcess?.env?.EXPO_PUBLIC_E2E_BYPASS_LOGIN,
+  false
+);
+const E2E_SEED_DATA = parseBooleanEnv(
+  process.env.EXPO_PUBLIC_E2E_SEED_DATA ?? runtimeProcess?.env?.EXPO_PUBLIC_E2E_SEED_DATA,
+  E2E_BYPASS_LOGIN
+);
 const E2E_SEED_KEY = 'e2e_seed_v1';
 
 let ensureSeedPromise: Promise<void> | null = null;

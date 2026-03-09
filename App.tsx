@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { AuthProvider } from './src/context/AuthContext';
 import { AppNavigator } from './src/navigation/AppNavigator';
+import { navigationRef } from './src/navigation/navigationRef';
 import { initializeLocalDb } from './src/offline/localDb';
 import { startOfflineSyncScheduler, stopOfflineSyncScheduler } from './src/offline/syncScheduler';
 
@@ -20,7 +21,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           <StatusBar style="dark" />
           <AppNavigator />
         </NavigationContainer>

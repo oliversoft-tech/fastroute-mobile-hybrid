@@ -93,7 +93,7 @@ function colorByIndex(index: number) {
   return ROUTE_COLORS[index % ROUTE_COLORS.length];
 }
 
-function buildLeafletSingleRouteHtml(points: SingleMapPoint[]) {
+function buildLeafletSingleRouteHtml(points: SingleMapPoint[], allowReorder: boolean) {
   const payload = JSON.stringify(
     points.map((point, index) => ({
       ...point,
@@ -119,6 +119,7 @@ function buildLeafletSingleRouteHtml(points: SingleMapPoint[]) {
     const points = ${payload};
     const orderedPointKeys = points.map((point) => point.pointKey);
     const movedPointKeys = new Set();
+    const allowReorder = ${allowReorder ? 'true' : 'false'};
     const map = L.map('map', {
       zoomControl: true,
       attributionControl: true,
@@ -272,11 +273,14 @@ function buildLeafletSingleRouteHtml(points: SingleMapPoint[]) {
         const order = getOrder(point.pointKey);
         const marker = L.marker([point.latitude, point.longitude], {
           icon: createIcon(point, order, points.length),
-          draggable: true,
+          draggable: allowReorder,
           autoPan: true
         }).addTo(markersLayer);
 
         marker.on('dragend', (event) => {
+          if (!allowReorder) {
+            return;
+          }
           const result = reorder(point.pointKey, event.target.getLatLng());
           if (result.changed) {
             movedPointKeys.add(point.pointKey);
@@ -309,16 +313,18 @@ function buildLeafletSingleRouteHtml(points: SingleMapPoint[]) {
         });
       });
 
-      const movedWaypointIds = [...new Set(
-        points
-          .filter((point) => movedPointKeys.has(point.pointKey))
-          .map((point) => point.waypointId)
-      )];
-      emit({
-        type: 'reorder',
-        order: [...orderedPointKeys],
-        movedWaypointIds
-      });
+      if (allowReorder) {
+        const movedWaypointIds = [...new Set(
+          points
+            .filter((point) => movedPointKeys.has(point.pointKey))
+            .map((point) => point.waypointId)
+        )];
+        emit({
+          type: 'reorder',
+          order: [...orderedPointKeys],
+          movedWaypointIds
+        });
+      }
     }
 
     applyViewport();
@@ -478,6 +484,109 @@ function buildDisplayFromSourceRoutes(basePoints: ImportBasePoint[]) {
   return { points, legend };
 }
 
+function computeGroupCenter(
+  waypointIds: number[],
+  pointByWaypointId: Map<number, ImportBasePoint>
+) {
+  let totalLat = 0;
+  let totalLng = 0;
+  let count = 0;
+
+  for (const waypointId of waypointIds) {
+    const point = pointByWaypointId.get(waypointId);
+    if (!point) {
+      continue;
+    }
+    totalLat += point.latitude;
+    totalLng += point.longitude;
+    count += 1;
+  }
+
+  if (count === 0) {
+    return null;
+  }
+
+  return {
+    lat: totalLat / count,
+    lng: totalLng / count
+  };
+}
+
+function groupCenterDistanceSquared(
+  sourceWaypointIds: number[],
+  targetWaypointIds: number[],
+  pointByWaypointId: Map<number, ImportBasePoint>
+) {
+  const sourceCenter = computeGroupCenter(sourceWaypointIds, pointByWaypointId);
+  const targetCenter = computeGroupCenter(targetWaypointIds, pointByWaypointId);
+  if (!sourceCenter || !targetCenter) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const latDiff = sourceCenter.lat - targetCenter.lat;
+  const lngDiff = sourceCenter.lng - targetCenter.lng;
+  return (latDiff * latDiff) + (lngDiff * lngDiff);
+}
+
+function enforceMinimumWaypointsPerGroup(
+  groups: number[][],
+  pointByWaypointId: Map<number, ImportBasePoint>,
+  minimumWaypointsPerRoute: number
+) {
+  const normalizedGroups = groups
+    .map((group) =>
+      [...new Set(
+        group
+          .map((value) => Math.trunc(Number(value)))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      )]
+    )
+    .filter((group) => group.length > 0);
+
+  if (normalizedGroups.length <= 1 || minimumWaypointsPerRoute <= 1) {
+    return normalizedGroups;
+  }
+
+  let guard = 0;
+  while (guard < 1000) {
+    guard += 1;
+
+    const smallGroupIndex = normalizedGroups.findIndex(
+      (group) => group.length > 0 && group.length < minimumWaypointsPerRoute
+    );
+
+    if (smallGroupIndex < 0 || normalizedGroups.length <= 1) {
+      break;
+    }
+
+    const sourceGroup = normalizedGroups[smallGroupIndex];
+    let targetGroupIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < normalizedGroups.length; index += 1) {
+      if (index === smallGroupIndex) {
+        continue;
+      }
+
+      const targetGroup = normalizedGroups[index];
+      const distance = groupCenterDistanceSquared(sourceGroup, targetGroup, pointByWaypointId);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        targetGroupIndex = index;
+      }
+    }
+
+    if (targetGroupIndex < 0) {
+      targetGroupIndex = smallGroupIndex === 0 ? 1 : 0;
+    }
+
+    normalizedGroups[targetGroupIndex] = [...normalizedGroups[targetGroupIndex], ...sourceGroup];
+    normalizedGroups.splice(smallGroupIndex, 1);
+  }
+
+  return normalizedGroups;
+}
+
 function buildDisplayFromRecalculatedEps(basePoints: ImportBasePoint[], epsMeters: number) {
   if (basePoints.length === 0) {
     return { points: [] as ImportDisplayPoint[], legend: [] as ImportLegendItem[] };
@@ -521,12 +630,31 @@ function buildDisplayFromRecalculatedEps(basePoints: ImportBasePoint[], epsMeter
     .filter((entry) => Array.isArray(entry.entries) && entry.entries.length > 0)
     .sort((a, b) => a.clusterId - b.clusterId);
 
+  const pointByWaypointId = new Map<number, ImportBasePoint>(
+    basePoints.map((point) => [point.waypointId, point])
+  );
+  const rawGroups = orderedGroups
+    .map((group) =>
+      group.entries
+        .map((entry) => Math.trunc(Number(entry.address_id)))
+        .filter((waypointId) => Number.isFinite(waypointId) && waypointId > 0)
+    )
+    .filter((group) => group.length > 0);
+  const normalizedGroups = enforceMinimumWaypointsPerGroup(rawGroups, pointByWaypointId, 2);
+
   const groupIndexByWaypointId = new Map<number, number>();
-  orderedGroups.forEach((group, groupIndex) => {
-    group.entries.forEach((entry) => {
-      groupIndexByWaypointId.set(entry.address_id, groupIndex);
+  normalizedGroups.forEach((group, groupIndex) => {
+    group.forEach((waypointId) => {
+      groupIndexByWaypointId.set(waypointId, groupIndex);
     });
   });
+
+  if (normalizedGroups.length === 0 && basePoints.length > 0) {
+    normalizedGroups.push(basePoints.map((point) => point.waypointId));
+    normalizedGroups[0].forEach((waypointId) => {
+      groupIndexByWaypointId.set(waypointId, 0);
+    });
+  }
 
   const orderCounterByGroup = new Map<number, number>();
   const countByGroup = new Map<number, number>();
@@ -545,7 +673,7 @@ function buildDisplayFromRecalculatedEps(basePoints: ImportBasePoint[], epsMeter
     };
   });
 
-  const legend = orderedGroups.map((_, groupIndex) => ({
+  const legend = normalizedGroups.map((_, groupIndex) => ({
     label: `Rota ${groupIndex + 1}`,
     color: colorByIndex(groupIndex),
     count: countByGroup.get(groupIndex) ?? 0
@@ -831,6 +959,10 @@ export function MapScreen({ route, navigation }: Props) {
     return reordered;
   }, [orderedPointKeys, pointsByKey, singleRoutePoints]);
 
+  const forceEnableReorderActions = !importPreviewMode && route.params.forceEnableReorderActions === true;
+  const canReorderRoute = forceEnableReorderActions || routeStatus === 'CRIADA';
+  const reorderLockedByRouteStatus = !canReorderRoute;
+
   useEffect(() => {
     if (importPreviewMode) {
       return;
@@ -845,7 +977,7 @@ export function MapScreen({ route, navigation }: Props) {
         return;
       }
 
-      if (!importPreviewMode && payload.type === 'reorder' && Array.isArray(payload.order)) {
+      if (!importPreviewMode && canReorderRoute && payload.type === 'reorder' && Array.isArray(payload.order)) {
         const orderKeys = payload.order.map((entry) => String(entry));
         setOrderedPointKeys(orderKeys);
         if (Array.isArray(payload.movedWaypointIds)) {
@@ -885,7 +1017,7 @@ export function MapScreen({ route, navigation }: Props) {
         });
       }
     },
-    [importPreviewMode, movedWaypointIds]
+    [canReorderRoute, importPreviewMode, movedWaypointIds]
   );
 
   useEffect(() => {
@@ -937,13 +1069,9 @@ export function MapScreen({ route, navigation }: Props) {
     () =>
       importPreviewMode
         ? buildLeafletImportRoutesHtml(importDisplayPoints)
-        : buildLeafletSingleRouteHtml(singleRoutePoints),
-    [importPreviewMode, importDisplayPoints, singleRoutePoints]
+        : buildLeafletSingleRouteHtml(singleRoutePoints, canReorderRoute),
+    [canReorderRoute, importPreviewMode, importDisplayPoints, singleRoutePoints]
   );
-
-  const forceEnableReorderActions = !importPreviewMode && route.params.forceEnableReorderActions === true;
-  const canReorderRoute = forceEnableReorderActions || routeStatus === 'CRIADA';
-  const reorderLockedByRouteStatus = !canReorderRoute;
 
   const onConfirmOrder = async () => {
     if (importPreviewMode) {
@@ -1022,7 +1150,7 @@ export function MapScreen({ route, navigation }: Props) {
 
   const mapKeySuffix = importPreviewMode
     ? `${importRouteIds.join('-')}-${activeImportEps}-${mapRenderKey}`
-    : `${route.params.routeId}-${mapRenderKey}`;
+    : `${route.params.routeId}-${canReorderRoute ? 'reorder-on' : 'reorder-off'}-${mapRenderKey}`;
 
   return (
     <View style={styles.screen}>

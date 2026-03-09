@@ -34,6 +34,11 @@ type RouteMetadataRow = {
 type RouteWaypointCountRow = {
   route_id: number | null;
 };
+type ImportFileLayoutRow = {
+  column_names: unknown;
+  created_at?: string | null;
+  id?: number | null;
+};
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
@@ -273,6 +278,65 @@ export async function resolveDriverUserIdFromAuthId(authUserId?: string | null) 
   }
 
   return toIntegerString((data?.[0] as { id?: unknown } | undefined)?.id);
+}
+
+function parseLayoutColumnNames(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter((entry) => entry.length > 0);
+  }
+
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter((entry) => entry.length > 0);
+    }
+  } catch {
+    // fallback para string delimitada
+  }
+
+  return trimmed
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+export async function getLatestImportFileLayoutColumnNames() {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('importfile_layout')
+    .select('id, created_at, column_names')
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw error;
+  }
+
+  const row = (data?.[0] ?? null) as ImportFileLayoutRow | null;
+  if (!row) {
+    return null;
+  }
+
+  const columnNames = parseLayoutColumnNames(row.column_names);
+  if (columnNames.length === 0) {
+    return null;
+  }
+
+  return columnNames;
 }
 
 export async function enrichWaypointsWithAddressData(waypoints: Waypoint[]): Promise<Waypoint[]> {

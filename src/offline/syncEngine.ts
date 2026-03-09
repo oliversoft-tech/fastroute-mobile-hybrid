@@ -56,6 +56,7 @@ interface ProcessPendingQueueResult {
   failed: boolean;
   failedMessage: string | null;
   pushedItems: SyncQueueItem[];
+  requiresRemoteOverwrite: boolean;
 }
 
 type SyncMutationEntityType = 'route' | 'route_waypoint';
@@ -78,10 +79,18 @@ interface SyncPushMutationResult {
   serverVersion?: number;
 }
 
+interface PushSingleMutationResult {
+  ok: boolean;
+  message?: string;
+  recoveredDuplicateCreate?: boolean;
+}
+
 let syncInFlight: Promise<SyncResult> | null = null;
 const syncFinishedListeners = new Set<SyncFinishedListener>();
 const SYNC_TIMEOUT_MS = 180000;
 const SYNC_HTTP_TIMEOUT_MS = 120000;
+const MAX_TRANSIENT_PUSH_ATTEMPTS = 3;
+const TRANSIENT_PUSH_RETRY_DELAYS_MS = [1200, 2500];
 const ROUTE_STATUS_RANK: Record<RouteStatus, number> = {
   CRIADA: 1,
   PENDENTE: 2,
@@ -162,6 +171,23 @@ function toQueueWaypointId(payload: Record<string, unknown>) {
     return null;
   }
   return waypointId;
+}
+
+function extractImportRouteIds(payload: Record<string, unknown>) {
+  const routeIds = Array.isArray(payload.route_ids)
+    ? payload.route_ids
+        .map((entry) => Math.trunc(Number(entry)))
+        .filter((routeId) => Number.isFinite(routeId) && routeId > 0)
+    : [];
+
+  if (routeIds.length === 0) {
+    const routeId = toQueueRouteId(payload);
+    if (routeId) {
+      routeIds.push(routeId);
+    }
+  }
+
+  return [...new Set(routeIds)].sort((a, b) => a - b);
 }
 
 function isTerminalWaypointStatus(status: WaypointStatus) {
@@ -711,6 +737,83 @@ function randomId() {
   return `${Date.now()}-${Math.trunc(Math.random() * 1_000_000_000)}`;
 }
 
+function buildStableMutationId(
+  queueItemId: number,
+  entityType: SyncMutationEntityType,
+  entityId: number,
+  op: string,
+  variant?: string | number
+) {
+  const normalizedOp = normalizeText(op) || 'UNKNOWN';
+  const normalizedVariant =
+    variant !== undefined && variant !== null
+      ? normalizeText(String(variant)).replace(/[^A-Z0-9_-]/g, '')
+      : '';
+  const variantSuffix = normalizedVariant ? `-${normalizedVariant}` : '';
+  return `${queueItemId}-${entityType}-${entityId}-${normalizedOp}${variantSuffix}`;
+}
+
+function isDuplicateCreateAlreadyApplied(message: string, mutation: SyncMutation) {
+  if (!normalizeText(mutation.op).includes('CREATE')) {
+    return false;
+  }
+
+  const normalizedMessage = normalizeText(message);
+  const hasDuplicateSignal =
+    normalizedMessage.includes('DUPLICATE KEY VALUE') ||
+    normalizedMessage.includes('VIOLATES UNIQUE CONSTRAINT') ||
+    normalizedMessage.includes('UNIQUE CONSTRAINT') ||
+    normalizedMessage.includes('SQLSTATE 23505') ||
+    normalizedMessage.includes('CODE 23505') ||
+    normalizedMessage.includes(' 23505 ');
+
+  if (!hasDuplicateSignal) {
+    return false;
+  }
+
+  if (mutation.entityType === 'route') {
+    return true;
+  }
+
+  if (mutation.entityType === 'route_waypoint') {
+    return true;
+  }
+
+  return false;
+}
+
+function isTransientPushFailureMessage(message: string) {
+  const normalized = normalizeText(message);
+  return (
+    normalized.includes('FETCH FAILED') ||
+    normalized.includes('NETWORK ERROR') ||
+    normalized.includes('TIMEOUT') ||
+    normalized.includes('ECONNABORTED') ||
+    normalized.includes('ETIMEDOUT') ||
+    normalized.includes('ECONNRESET') ||
+    normalized.includes('ENOTFOUND') ||
+    normalized.includes('EAI_AGAIN') ||
+    normalized.includes('BAD GATEWAY') ||
+    normalized.includes('GATEWAY TIMEOUT') ||
+    normalized.includes('SERVICE UNAVAILABLE') ||
+    normalized.includes('ERRO AO BUSCAR WAYPOINT PARA SYNC')
+  );
+}
+
+function getTransientPushRetryDelayMs(attemptIndex: number) {
+  if (attemptIndex < 0) {
+    return TRANSIENT_PUSH_RETRY_DELAYS_MS[0];
+  }
+  const boundedIndex = Math.min(attemptIndex, TRANSIENT_PUSH_RETRY_DELAYS_MS.length - 1);
+  return TRANSIENT_PUSH_RETRY_DELAYS_MS[boundedIndex];
+}
+
+function waitForMs(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function normalizePushStatus(value: unknown) {
   const normalized = normalizeText(value);
   if (!normalized) {
@@ -810,7 +913,8 @@ async function buildMutationsForQueueItem(
     routeId: number,
     op: string,
     mutationPayload: Record<string, unknown>,
-    allowNotFound = false
+    allowNotFound = false,
+    variant?: string | number
   ) => {
     const normalizedOp = normalizeText(op);
     const baseVersion = normalizedOp.includes('CREATE')
@@ -818,7 +922,7 @@ async function buildMutationsForQueueItem(
       : await getStoredEntityVersion('route', routeId);
     mutations.push({
       queueItemId: item.id,
-      mutationId: `${item.id}-route-${routeId}-${randomId()}`,
+      mutationId: buildStableMutationId(item.id, 'route', routeId, op, variant),
       deviceId,
       entityType: 'route',
       entityId: routeId,
@@ -833,7 +937,8 @@ async function buildMutationsForQueueItem(
     waypointId: number,
     op: string,
     mutationPayload: Record<string, unknown>,
-    allowNotFound = false
+    allowNotFound = false,
+    variant?: string | number
   ) => {
     const normalizedOp = normalizeText(op);
     const baseVersion = normalizedOp.includes('CREATE')
@@ -841,7 +946,7 @@ async function buildMutationsForQueueItem(
       : await getStoredEntityVersion('route_waypoint', waypointId);
     mutations.push({
       queueItemId: item.id,
-      mutationId: `${item.id}-waypoint-${waypointId}-${randomId()}`,
+      mutationId: buildStableMutationId(item.id, 'route_waypoint', waypointId, op, variant),
       deviceId,
       entityType: 'route_waypoint',
       entityId: waypointId,
@@ -892,11 +997,13 @@ async function buildMutationsForQueueItem(
     case 'REORDER_WAYPOINTS': {
       const routeId = toQueueRouteId(payload);
       const reordered = extractQueuedReorderedWaypoints(payload);
-      for (const entry of reordered) {
+      for (const [reorderIndex, entry] of reordered.entries()) {
         await pushWaypointMutation(
           entry.waypoint_id,
           'UPDATE',
-          { route_id: routeId ?? undefined, seq_order: entry.seqorder, status: 'REORDENADO' }
+          { route_id: routeId ?? undefined, seq_order: entry.seqorder, status: 'REORDENADO' },
+          false,
+          `${entry.seqorder}-${reorderIndex}`
         );
       }
       return mutations;
@@ -906,7 +1013,21 @@ async function buildMutationsForQueueItem(
       if (!routeId) {
         return mutations;
       }
-      await pushRouteMutation(routeId, 'DELETE', { status: 'CANCELADA', ativa: false });
+      const cancelReason = pickString(
+        payload.justificativa_cancel,
+        payload.cancel_reason,
+        payload.cancelReason
+      );
+      await pushRouteMutation(
+        routeId,
+        'UPDATE',
+        {
+          status: 'CANCELADA',
+          ativa: false,
+          justificativa_cancel: cancelReason ?? null
+        },
+        true
+      );
       return mutations;
     }
     case 'IMPORT_ROUTE_FILE': {
@@ -914,17 +1035,7 @@ async function buildMutationsForQueueItem(
       const authUserIdFromSession = pickString(authSession?.userId) ?? null;
       const authUserIdFromPayload = pickString(payload.auth_user_id, payload.authUserId) ?? null;
       const authUserId = authUserIdFromPayload ?? authUserIdFromSession;
-      const routeIds = Array.isArray(payload.route_ids)
-        ? payload.route_ids
-            .map((entry) => Math.trunc(Number(entry)))
-            .filter((routeId) => Number.isFinite(routeId) && routeId > 0)
-        : [];
-      if (routeIds.length === 0) {
-        const routeId = toQueueRouteId(payload);
-        if (routeId) {
-          routeIds.push(routeId);
-        }
-      }
+      const routeIds = extractImportRouteIds(payload);
 
       if (routeIds.length === 0) {
         throw new Error('Falha no sync: payload de IMPORT_ROUTE_FILE sem route_ids válidos.');
@@ -966,7 +1077,7 @@ async function buildMutationsForQueueItem(
         );
       }
 
-      for (const routeId of routeIds) {
+      for (const [routeIndex, routeId] of routeIds.entries()) {
         const localRoute = await getLocalRoute(routeId);
         if (!localRoute) {
           continue;
@@ -989,9 +1100,9 @@ async function buildMutationsForQueueItem(
           created_at: localRoute.created_at ?? new Date().toISOString(),
           waypoints_count: localWaypoints.length,
           ativa: false
-        });
+        }, false, routeIndex);
 
-        for (const waypoint of localWaypoints) {
+        for (const [waypointIndex, waypoint] of localWaypoints.entries()) {
           await pushWaypointMutation(waypoint.id, 'CREATE', {
             id: waypoint.id,
             route_id: routeId,
@@ -1002,7 +1113,7 @@ async function buildMutationsForQueueItem(
             detailed_address: waypoint.title ?? null,
             lat: waypoint.latitude ?? null,
             long: waypoint.longitude ?? null
-          });
+          }, false, waypointIndex);
         }
       }
       return mutations;
@@ -1035,81 +1146,508 @@ function readPushMutationResult(payload: unknown): SyncPushMutationResult | null
   };
 }
 
-async function pushSingleMutation(mutation: SyncMutation): Promise<{ ok: boolean; message?: string }> {
-  let currentBaseVersion = mutation.baseVersion;
+async function isImportRetryFullyPersistedRemotely(
+  item: SyncQueueItem,
+  expectedCreateMutations: SyncMutation[]
+) {
+  const toSortedPositiveIntList = (values: unknown[]) =>
+    values
+      .map((value) => Math.trunc(Number(value)))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b);
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const { data } = await httpClient.post(
-      buildFastRouteApiUrl('/sync/push'),
-      {
-        mutations: [
-          {
-            deviceId: mutation.deviceId,
-            mutationId: mutation.mutationId,
-            entityType: mutation.entityType,
-            entityId: mutation.entityId,
-            op: mutation.op,
-            baseVersion: currentBaseVersion,
-            payload: mutation.payload
-          }
-        ]
-      },
-      {
-        timeout: SYNC_HTTP_TIMEOUT_MS
+  const haveSameSortedValues = (left: number[], right: number[]) => {
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) {
+        return false;
       }
-    );
-
-    if (!isPayloadOk(data)) {
-      return { ok: false, message: readErrorMessage(data, 'Falha ao sincronizar mutação pendente.') };
     }
+    return true;
+  };
 
-    const root = asRecord(data);
-    const rawResults = Array.isArray(root?.results) ? root?.results : [];
-    const parsedResult = rawResults
-      .map((entry) => readPushMutationResult(entry))
-      .find((entry) => entry?.mutationId === mutation.mutationId);
-
-    if (!parsedResult) {
-      return { ok: false, message: 'Resposta inválida de sync/push: resultado da mutação não encontrado.' };
+  const haveSameSortedTextValues = (left: string[], right: string[]) => {
+    if (left.length !== right.length) {
+      return false;
     }
-
-    const normalizedStatus = normalizePushStatus(parsedResult.status);
-    if (normalizedStatus === 'APPLIED') {
-      await setStoredEntityVersion(mutation.entityType, mutation.entityId, currentBaseVersion + 1);
-      return { ok: true };
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) {
+        return false;
+      }
     }
+    return true;
+  };
 
-    if (normalizedStatus === 'DUPLICATE') {
-      return { ok: true };
+  const buildAddressOrderSignature = (
+    waypoints: Array<{
+      address_id?: unknown;
+      seq_order?: unknown;
+    }>
+  ) =>
+    waypoints
+      .map((waypoint) => {
+        const addressId = Math.trunc(Number(waypoint.address_id));
+        const seqOrder = Math.trunc(Number(waypoint.seq_order));
+        if (!Number.isFinite(addressId) || addressId <= 0) {
+          return null;
+        }
+        const normalizedSeqOrder = Number.isFinite(seqOrder) && seqOrder > 0 ? seqOrder : 0;
+        return `${normalizedSeqOrder}:${addressId}`;
+      })
+      .filter((entry): entry is string => Boolean(entry))
+      .sort();
+
+  const loadRouteSnapshot = async (routeId?: number): Promise<RouteDetail[] | null> => {
+    try {
+      const response = await httpClient.get(buildFastRouteApiUrl('/route'), {
+        params: routeId ? { route_id: routeId } : undefined,
+        timeout: SYNC_HTTP_TIMEOUT_MS
+      });
+      if (!isPayloadOk(response.data)) {
+        return [];
+      }
+      return extractRoutesFromPullResponse(response.data);
+    } catch {
+      return null;
     }
+  };
 
-    if (normalizedStatus === 'NOT_FOUND' && mutation.allowNotFound) {
-      return { ok: true };
+  const expectedByRouteId = new Map<
+    number,
+    {
+      clusterId?: number;
+      importId?: number;
+      driverId?: number;
+      waypointIds: number[];
+      waypointAddressIds: number[];
+      waypointOrderSignature: string[];
+      waypoints: Array<{
+        id?: number;
+        addressId?: number;
+        seqOrder?: number;
+      }>;
     }
+  >();
 
-    if (normalizedStatus === 'NOT_FOUND' && normalizeText(mutation.op).includes('CREATE')) {
-      return {
-        ok: false,
-        message:
-          'Falha no sync: backend não suporta criação de rotas/waypoints via /sync/push. Atualize o backend para aceitar mutações CREATE.'
-      };
-    }
-
-    if (
-      normalizedStatus === 'CONFLICT' &&
-      attempt === 0 &&
-      Number.isFinite(parsedResult.serverVersion) &&
-      (parsedResult.serverVersion ?? -1) >= 0
-    ) {
-      currentBaseVersion = Math.trunc(parsedResult.serverVersion ?? currentBaseVersion);
-      await setStoredEntityVersion(mutation.entityType, mutation.entityId, currentBaseVersion);
+  for (const mutation of expectedCreateMutations) {
+    if (!normalizeText(mutation.op).includes('CREATE')) {
       continue;
     }
 
-    const serverVersionMessage = Number.isFinite(parsedResult.serverVersion)
-      ? ` (serverVersion=${parsedResult.serverVersion})`
-      : '';
-    return { ok: false, message: `Mutação ${mutation.mutationId} rejeitada com status ${normalizedStatus}${serverVersionMessage}.` };
+    if (mutation.entityType === 'route') {
+      const routeId = Math.trunc(Number(mutation.entityId));
+      if (!Number.isFinite(routeId) || routeId <= 0) {
+        continue;
+      }
+      const mutationPayload = mutation.payload as Record<string, unknown>;
+      const clusterId = Math.trunc(Number(mutationPayload.cluster_id));
+      const importId = toOptionalPositiveInt(mutationPayload.import_id);
+      const driverId =
+        toOptionalPositiveInt(mutationPayload.driver_id) ??
+        toOptionalPositiveInt(mutationPayload.user_id);
+      const current =
+        expectedByRouteId.get(routeId) ??
+        { waypointIds: [], waypointAddressIds: [], waypointOrderSignature: [], waypoints: [] };
+      expectedByRouteId.set(routeId, {
+        ...current,
+        clusterId: Number.isFinite(clusterId) && clusterId > 0 ? clusterId : current.clusterId,
+        importId: importId ?? current.importId,
+        driverId: driverId ?? current.driverId
+      });
+      continue;
+    }
+
+    if (mutation.entityType === 'route_waypoint') {
+      const payload = mutation.payload as Record<string, unknown>;
+      const routeId = Math.trunc(Number(payload.route_id));
+      if (!Number.isFinite(routeId) || routeId <= 0) {
+        continue;
+      }
+
+      const waypointId = Math.trunc(Number(payload.id ?? mutation.entityId));
+      const addressId = Math.trunc(Number(payload.address_id));
+      const seqOrder = Math.trunc(Number(payload.seq_order));
+      const normalizedSeqOrder = Number.isFinite(seqOrder) && seqOrder > 0 ? seqOrder : 0;
+
+      const current =
+        expectedByRouteId.get(routeId) ??
+        { waypointIds: [], waypointAddressIds: [], waypointOrderSignature: [], waypoints: [] };
+
+      const nextWaypointIds = [...current.waypointIds];
+      if (Number.isFinite(waypointId) && waypointId > 0 && !nextWaypointIds.includes(waypointId)) {
+        nextWaypointIds.push(waypointId);
+      }
+
+      const nextWaypointAddressIds = [...current.waypointAddressIds];
+      if (Number.isFinite(addressId) && addressId > 0) {
+        nextWaypointAddressIds.push(addressId);
+      }
+
+      const nextWaypointOrderSignature = [...current.waypointOrderSignature];
+      if (Number.isFinite(addressId) && addressId > 0) {
+        nextWaypointOrderSignature.push(`${normalizedSeqOrder}:${addressId}`);
+      }
+
+      const nextWaypoints = [...current.waypoints];
+      nextWaypoints.push({
+        id: Number.isFinite(waypointId) && waypointId > 0 ? waypointId : undefined,
+        addressId: Number.isFinite(addressId) && addressId > 0 ? addressId : undefined,
+        seqOrder: normalizedSeqOrder > 0 ? normalizedSeqOrder : undefined
+      });
+
+      expectedByRouteId.set(routeId, {
+        ...current,
+        waypointIds: nextWaypointIds,
+        waypointAddressIds: nextWaypointAddressIds,
+        waypointOrderSignature: nextWaypointOrderSignature,
+        waypoints: nextWaypoints
+      });
+    }
+  }
+
+  if (expectedByRouteId.size === 0) {
+    const payload = item.payload ?? {};
+    const routeIds = extractImportRouteIds(payload);
+    for (const routeId of routeIds) {
+      expectedByRouteId.set(routeId, {
+        waypointIds: [],
+        waypointAddressIds: [],
+        waypointOrderSignature: [],
+        waypoints: []
+      });
+    }
+  }
+
+  if (expectedByRouteId.size === 0) {
+    return false;
+  }
+
+  const loadAllChangesFromSyncPull = async (): Promise<ApiRecord[] | null> => {
+    try {
+      const response = await httpClient.post(
+        buildFastRouteApiUrl('/sync/pull'),
+        { sinceTs: '1970-01-01T00:00:00.000Z' },
+        { timeout: SYNC_HTTP_TIMEOUT_MS }
+      );
+      if (!isPayloadOk(response.data)) {
+        return [];
+      }
+
+      const root = asRecord(response.data);
+      return extractArray(root?.changes)
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is ApiRecord => Boolean(entry));
+    } catch {
+      return null;
+    }
+  };
+
+  const changesFromPull = await loadAllChangesFromSyncPull();
+  if (changesFromPull && changesFromPull.length > 0) {
+    const routePayloads = changesFromPull
+      .filter((change) => normalizeText(change.entity_type ?? change.entityType) === 'ROUTE')
+      .map((change) => asStructuredRecord(change.payload))
+      .filter((payload): payload is ApiRecord => Boolean(payload));
+
+    const waypointPayloads = changesFromPull
+      .filter((change) => normalizeText(change.entity_type ?? change.entityType) === 'ROUTE_WAYPOINT')
+      .map((change) => asStructuredRecord(change.payload))
+      .filter((payload): payload is ApiRecord => Boolean(payload));
+
+    let allRoutesConfirmedByChangeLog = true;
+
+    for (const [routeId, expected] of expectedByRouteId.entries()) {
+      const routeMatched = routePayloads.some((payload) => {
+        const payloadRouteId = toOptionalPositiveInt(payload.id ?? payload.route_id ?? payload.routeId);
+        if (payloadRouteId && payloadRouteId === routeId) {
+          return true;
+        }
+
+        const payloadClusterId = toOptionalPositiveInt(payload.cluster_id ?? payload.clusterId);
+        const payloadImportId = toOptionalPositiveInt(payload.import_id ?? payload.importId);
+        const payloadDriverId = toOptionalPositiveInt(
+          payload.driver_id ?? payload.driverId ?? payload.user_id ?? payload.userId
+        );
+
+        if (expected.clusterId && payloadClusterId && payloadClusterId !== expected.clusterId) {
+          return false;
+        }
+        if (expected.importId && payloadImportId && payloadImportId !== expected.importId) {
+          return false;
+        }
+        if (expected.driverId && payloadDriverId && payloadDriverId !== expected.driverId) {
+          return false;
+        }
+
+        return Boolean(expected.clusterId || expected.importId || expected.driverId);
+      });
+
+      if (!routeMatched) {
+        allRoutesConfirmedByChangeLog = false;
+        break;
+      }
+
+      for (const expectedWaypoint of expected.waypoints) {
+        const waypointMatched = waypointPayloads.some((payload) => {
+          const payloadWaypointId = toOptionalPositiveInt(payload.id ?? payload.waypoint_id ?? payload.waypointId);
+          if (expectedWaypoint.id && payloadWaypointId === expectedWaypoint.id) {
+            return true;
+          }
+
+          const payloadAddressId = toOptionalPositiveInt(payload.address_id ?? payload.addressId);
+          const payloadSeqOrder = Math.trunc(Number(payload.seq_order ?? payload.seqorder ?? payload.seqOrder));
+          if (
+            expectedWaypoint.addressId &&
+            payloadAddressId === expectedWaypoint.addressId &&
+            (!expectedWaypoint.seqOrder || payloadSeqOrder === expectedWaypoint.seqOrder)
+          ) {
+            return true;
+          }
+
+          return false;
+        });
+
+        if (!waypointMatched) {
+          allRoutesConfirmedByChangeLog = false;
+          break;
+        }
+      }
+
+      if (!allRoutesConfirmedByChangeLog) {
+        break;
+      }
+    }
+
+    if (allRoutesConfirmedByChangeLog) {
+      return true;
+    }
+  }
+
+  const fallbackRoutes = await loadRouteSnapshot();
+  if (fallbackRoutes === null) {
+    return false;
+  }
+  const fallbackRoutePool = [...fallbackRoutes];
+
+  for (const [routeId, expected] of expectedByRouteId.entries()) {
+    const expectedWaypointIds = toSortedPositiveIntList(expected.waypointIds);
+    const expectedAddressIds = toSortedPositiveIntList(expected.waypointAddressIds);
+    const expectedAddressOrderSignature = [...expected.waypointOrderSignature].sort();
+    const expectedClusterId = Math.trunc(Number(expected.clusterId));
+
+    const directRoutes = await loadRouteSnapshot(routeId);
+    if (directRoutes === null) {
+      return false;
+    }
+    const directRoute = directRoutes.find((route) => route.id === routeId);
+
+    let matchedRoute: RouteDetail | undefined;
+    let matchedByContent = false;
+
+    if (directRoute) {
+      matchedRoute = directRoute;
+    } else {
+      const matchIndex = fallbackRoutePool.findIndex((candidate) => {
+        const candidateClusterId = Math.trunc(Number(candidate.cluster_id));
+        if (
+          Number.isFinite(expectedClusterId) &&
+          expectedClusterId > 0 &&
+          Number.isFinite(candidateClusterId) &&
+          candidateClusterId > 0 &&
+          candidateClusterId !== expectedClusterId
+        ) {
+          return false;
+        }
+
+        const candidateWaypoints = candidate.waypoints ?? [];
+        const candidateAddressIds = toSortedPositiveIntList(
+          candidateWaypoints.map((waypoint) => waypoint.address_id)
+        );
+
+        if (expectedAddressIds.length > 0 && !haveSameSortedValues(expectedAddressIds, candidateAddressIds)) {
+          return false;
+        }
+
+        const candidateAddressOrderSignature = buildAddressOrderSignature(candidateWaypoints);
+        if (
+          expectedAddressOrderSignature.length > 0 &&
+          !haveSameSortedTextValues(expectedAddressOrderSignature, candidateAddressOrderSignature)
+        ) {
+          return false;
+        }
+
+        if (expectedWaypointIds.length === 0) {
+          return candidateWaypoints.length > 0 || candidate.id === routeId;
+        }
+
+        return candidateWaypoints.length >= expectedWaypointIds.length;
+      });
+
+      if (matchIndex >= 0) {
+        matchedRoute = fallbackRoutePool[matchIndex];
+        matchedByContent = true;
+        fallbackRoutePool.splice(matchIndex, 1);
+      }
+    }
+
+    if (!matchedRoute) {
+      return false;
+    }
+
+    const matchedWaypoints = matchedRoute.waypoints ?? [];
+    const remoteWaypointIds = new Set(toSortedPositiveIntList(matchedWaypoints.map((waypoint) => waypoint.id)));
+
+    if (!matchedByContent && expectedWaypointIds.length > 0 && remoteWaypointIds.size === 0) {
+      return false;
+    }
+
+    if (!matchedByContent) {
+      const allWaypointIdsPresent = expectedWaypointIds.every((waypointId) => remoteWaypointIds.has(waypointId));
+      if (allWaypointIdsPresent) {
+        continue;
+      }
+    }
+
+    const remoteAddressIds = toSortedPositiveIntList(matchedWaypoints.map((waypoint) => waypoint.address_id));
+    if (expectedAddressIds.length > 0 && !haveSameSortedValues(expectedAddressIds, remoteAddressIds)) {
+      return false;
+    }
+
+    const remoteAddressOrderSignature = buildAddressOrderSignature(matchedWaypoints);
+    if (
+      expectedAddressOrderSignature.length > 0 &&
+      !haveSameSortedTextValues(expectedAddressOrderSignature, remoteAddressOrderSignature)
+    ) {
+      return false;
+    }
+
+    if (!matchedByContent) {
+      const expectedCount = Math.max(expectedWaypointIds.length, expectedAddressOrderSignature.length);
+      const remoteCount = matchedWaypoints.length;
+      if (remoteCount < expectedCount) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+async function pushSingleMutation(mutation: SyncMutation): Promise<PushSingleMutationResult> {
+  let currentBaseVersion = mutation.baseVersion;
+
+  retryTransient: for (let transientAttempt = 0; transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS; transientAttempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let data: unknown;
+      try {
+        const response = await httpClient.post(
+          buildFastRouteApiUrl('/sync/push'),
+          {
+            mutations: [
+              {
+                deviceId: mutation.deviceId,
+                mutationId: mutation.mutationId,
+                entityType: mutation.entityType,
+                entityId: mutation.entityId,
+                op: mutation.op,
+                baseVersion: currentBaseVersion,
+                payload: mutation.payload
+              }
+            ]
+          },
+          {
+            timeout: SYNC_HTTP_TIMEOUT_MS
+          }
+        );
+        data = response.data;
+      } catch (error) {
+        const failureMessage = getApiError(error);
+        if (isDuplicateCreateAlreadyApplied(failureMessage, mutation)) {
+          return { ok: true, recoveredDuplicateCreate: true };
+        }
+        if (
+          isTransientPushFailureMessage(failureMessage) &&
+          transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS - 1
+        ) {
+          await waitForMs(getTransientPushRetryDelayMs(transientAttempt));
+          continue retryTransient;
+        }
+        return { ok: false, message: failureMessage };
+      }
+
+      if (!isPayloadOk(data)) {
+        const failureMessage = readErrorMessage(data, 'Falha ao sincronizar mutação pendente.');
+        if (isDuplicateCreateAlreadyApplied(failureMessage, mutation)) {
+          return { ok: true, recoveredDuplicateCreate: true };
+        }
+        if (
+          isTransientPushFailureMessage(failureMessage) &&
+          transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS - 1
+        ) {
+          await waitForMs(getTransientPushRetryDelayMs(transientAttempt));
+          continue retryTransient;
+        }
+        return { ok: false, message: failureMessage };
+      }
+
+      const root = asRecord(data);
+      const rawResults = Array.isArray(root?.results) ? root?.results : [];
+      const parsedResult = rawResults
+        .map((entry) => readPushMutationResult(entry))
+        .find((entry) => entry?.mutationId === mutation.mutationId);
+
+      if (!parsedResult) {
+        return { ok: false, message: 'Resposta inválida de sync/push: resultado da mutação não encontrado.' };
+      }
+
+      const normalizedStatus = normalizePushStatus(parsedResult.status);
+      if (normalizedStatus === 'APPLIED') {
+        await setStoredEntityVersion(mutation.entityType, mutation.entityId, currentBaseVersion + 1);
+        return { ok: true };
+      }
+
+      if (normalizedStatus === 'DUPLICATE') {
+        return { ok: true };
+      }
+
+      if (normalizedStatus === 'NOT_FOUND' && mutation.allowNotFound) {
+        return { ok: true };
+      }
+
+      if (normalizedStatus === 'NOT_FOUND' && normalizeText(mutation.op).includes('CREATE')) {
+        return {
+          ok: false,
+          message:
+            'Falha no sync: backend não suporta criação de rotas/waypoints via /sync/push. Atualize o backend para aceitar mutações CREATE.'
+        };
+      }
+
+      if (
+        normalizedStatus === 'CONFLICT' &&
+        attempt === 0 &&
+        Number.isFinite(parsedResult.serverVersion) &&
+        (parsedResult.serverVersion ?? -1) >= 0
+      ) {
+        currentBaseVersion = Math.trunc(parsedResult.serverVersion ?? currentBaseVersion);
+        await setStoredEntityVersion(mutation.entityType, mutation.entityId, currentBaseVersion);
+        continue;
+      }
+
+      const serverVersionMessage = Number.isFinite(parsedResult.serverVersion)
+        ? ` (serverVersion=${parsedResult.serverVersion})`
+        : '';
+      const rejectionMessage = `Mutação ${mutation.mutationId} rejeitada com status ${normalizedStatus}${serverVersionMessage}.`;
+      if (
+        isTransientPushFailureMessage(rejectionMessage) &&
+        transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS - 1
+      ) {
+        await waitForMs(getTransientPushRetryDelayMs(transientAttempt));
+        continue retryTransient;
+      }
+      return { ok: false, message: rejectionMessage };
+    }
   }
 
   return { ok: false, message: 'Falha desconhecida ao aplicar mutação pendente.' };
@@ -1128,13 +1666,20 @@ function notifySyncFinished(result: SyncResult) {
 async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
   const pending = await listPendingSyncOperations(500);
   if (pending.length === 0) {
-    return { processed: 0, failed: false, failedMessage: null as string | null, pushedItems: [] };
+    return {
+      processed: 0,
+      failed: false,
+      failedMessage: null as string | null,
+      pushedItems: [],
+      requiresRemoteOverwrite: false
+    };
   }
 
   const deviceId = await getSyncDeviceId();
   const pushedItems: SyncQueueItem[] = [];
   let processed = 0;
   let firstFailureMessage: string | null = null;
+  let requiresRemoteOverwrite = false;
 
   for (const item of pending) {
     try {
@@ -1148,12 +1693,26 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
       }
 
       let itemFailedMessage: string | null = null;
+      let recoveredDuplicateCreate = false;
+      const createMutationsForItem = mutations.filter((mutation) =>
+        normalizeText(mutation.op).includes('CREATE')
+      );
       for (const mutation of mutations) {
         const mutationResult = await pushSingleMutation(mutation);
         if (!mutationResult.ok) {
           itemFailedMessage = mutationResult.message ?? 'Falha ao sincronizar mutação pendente.';
           break;
         }
+        if (mutationResult.recoveredDuplicateCreate) {
+          recoveredDuplicateCreate = true;
+        }
+      }
+
+      if (!itemFailedMessage && recoveredDuplicateCreate && item.opType === 'IMPORT_ROUTE_FILE') {
+        // Se todas as mutações CREATE deste item retornaram APPLIED ou DUPLICATE
+        // no /sync/push individual, considera persistência remota confirmada e
+        // força fullPull para sobrescrever o local com o estado autoritativo.
+        requiresRemoteOverwrite = true;
       }
 
       if (itemFailedMessage) {
@@ -1181,7 +1740,8 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
     processed,
     failed: firstFailureMessage !== null,
     failedMessage: firstFailureMessage,
-    pushedItems
+    pushedItems,
+    requiresRemoteOverwrite
   };
 }
 
@@ -1350,7 +1910,9 @@ async function runSync(trigger: SyncTrigger, options?: SyncOptions): Promise<Syn
 
   let pulledRoutes = 0;
   try {
-    pulledRoutes = await pullRemoteSnapshot(options);
+    pulledRoutes = await pullRemoteSnapshot(
+      queueResult.requiresRemoteOverwrite ? { ...(options ?? {}), fullPull: true } : options
+    );
     await reconcileRecentlyPushedOperations(queueResult.pushedItems);
   } catch (error) {
     const pendingOperations = await countPendingSyncOperations();

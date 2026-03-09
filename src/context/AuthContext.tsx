@@ -41,7 +41,7 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean) {
 }
 
 const E2E_BYPASS_LOGIN = parseBooleanEnv(
-  runtimeProcess?.env?.EXPO_PUBLIC_E2E_BYPASS_LOGIN,
+  process.env.EXPO_PUBLIC_E2E_BYPASS_LOGIN ?? runtimeProcess?.env?.EXPO_PUBLIC_E2E_BYPASS_LOGIN,
   false
 );
 

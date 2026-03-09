@@ -8,13 +8,16 @@ import {
   backfillLocalWaypointTitlesByAddress,
   deleteLocalRoute,
   enqueueSyncOperation,
+  getLastImportedRouteIds as getStoredLastImportedRouteIds,
   getLocalDb,
   getLocalRoute,
   getLocalWaypointPhotoUri,
   getLocalWaypoint,
   listLocalRoutes,
   listLocalWaypoints,
+  removeLastImportedRouteId,
   replaceLocalRouteWaypoints,
+  setLastImportedRouteIds as setStoredLastImportedRouteIds,
   updatePendingImportRouteIds,
   upsertLocalWaypointPhotoUri,
   updateLocalRouteStatus,
@@ -366,6 +369,62 @@ export async function updateWaypointOrder(params: {
   });
 }
 
+function enforceMinimumWaypointsPerRouteGroup(
+  groups: number[][],
+  minimumWaypointsPerRoute: number
+) {
+  const normalizedGroups = groups
+    .map((group) =>
+      [...new Set(
+        group
+          .map((value) => Math.trunc(Number(value)))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      )]
+    )
+    .filter((group) => group.length > 0);
+
+  if (normalizedGroups.length <= 1 || minimumWaypointsPerRoute <= 1) {
+    return normalizedGroups;
+  }
+
+  let guard = 0;
+  while (guard < 1000) {
+    guard += 1;
+
+    const smallGroupIndex = normalizedGroups.findIndex(
+      (group) => group.length > 0 && group.length < minimumWaypointsPerRoute
+    );
+    if (smallGroupIndex < 0 || normalizedGroups.length <= 1) {
+      break;
+    }
+
+    let targetGroupIndex = -1;
+    let maxSize = -1;
+    for (let index = 0; index < normalizedGroups.length; index += 1) {
+      if (index === smallGroupIndex) {
+        continue;
+      }
+      const size = normalizedGroups[index].length;
+      if (size > maxSize) {
+        maxSize = size;
+        targetGroupIndex = index;
+      }
+    }
+
+    if (targetGroupIndex < 0) {
+      targetGroupIndex = smallGroupIndex === 0 ? 1 : 0;
+    }
+
+    normalizedGroups[targetGroupIndex] = [
+      ...normalizedGroups[targetGroupIndex],
+      ...normalizedGroups[smallGroupIndex]
+    ];
+    normalizedGroups.splice(smallGroupIndex, 1);
+  }
+
+  return normalizedGroups;
+}
+
 export async function confirmImportedRoutesGrouping(params: {
   importRouteIds: number[];
   groupedWaypointIds: number[][];
@@ -403,7 +462,7 @@ export async function confirmImportedRoutesGrouping(params: {
   }
 
   const assignedWaypointIds = new Set<number>();
-  const normalizedGroups = groups.map((group) =>
+  let normalizedGroups = groups.map((group) =>
     group.filter((waypointId) => {
       if (!sourceWaypointById.has(waypointId) || assignedWaypointIds.has(waypointId)) {
         return false;
@@ -421,6 +480,8 @@ export async function confirmImportedRoutesGrouping(params: {
       normalizedGroups[0] = [...normalizedGroups[0], ...missingWaypointIds];
     }
   }
+
+  normalizedGroups = enforceMinimumWaypointsPerRouteGroup(normalizedGroups, 2);
 
   const currentRoutes = await listLocalRoutes();
   const currentRouteById = new Map(currentRoutes.map((entry) => [entry.id, entry]));
@@ -497,6 +558,7 @@ export async function confirmImportedRoutesGrouping(params: {
   });
 
   await updatePendingImportRouteIds(importRouteIds, finalRouteIds);
+  await setStoredLastImportedRouteIds(finalRouteIds);
   return finalRouteIds;
 }
 
@@ -515,8 +577,18 @@ export async function getWaypointDeliveryPhoto(
   return null;
 }
 
-export async function deleteRoute(routeId: number): Promise<DeleteRouteResult> {
+export async function getLastImportedRouteIds() {
+  return getStoredLastImportedRouteIds();
+}
+
+export async function deleteRoute(routeId: number, cancelReason?: string): Promise<DeleteRouteResult> {
+  const normalizedCancelReason = cancelReason?.trim() || undefined;
   await deleteLocalRoute(routeId);
-  await enqueueSyncOperation('DELETE_ROUTE', { routeId });
+  await removeLastImportedRouteId(routeId);
+  await enqueueSyncOperation('DELETE_ROUTE', {
+    routeId,
+    cancel_reason: normalizedCancelReason,
+    justificativa_cancel: normalizedCancelReason
+  });
   return { queuedForSync: true };
 }

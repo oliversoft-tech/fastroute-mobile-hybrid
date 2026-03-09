@@ -24,9 +24,16 @@ const SETTINGS_KEY_DAILY_SYNC_TIME = 'daily_sync_time';
 const SETTINGS_KEY_LAST_SYNC_AT = 'last_sync_at';
 const SETTINGS_KEY_LAST_DAILY_SYNC_DATE = 'last_daily_sync_date';
 const SETTINGS_KEY_INITIAL_SYNC_DONE = 'initial_sync_done';
+const SETTINGS_KEY_LAST_IMPORTED_ROUTE_IDS = 'last_imported_route_ids';
 
 let dbPromise: Promise<SQLiteDatabase> | null = null;
 let schemaReady = false;
+let dbClient: LocalDbClient | null = null;
+
+type LocalDbClient = Pick<
+  SQLiteDatabase,
+  'execAsync' | 'runAsync' | 'getAllAsync' | 'getFirstAsync' | 'withTransactionAsync'
+>;
 
 type RouteRow = {
   id: number;
@@ -177,13 +184,111 @@ async function ensureSchema(db: SQLiteDatabase) {
   schemaReady = true;
 }
 
-export async function getLocalDb() {
-  if (!dbPromise) {
-    dbPromise = openDatabaseAsync(DATABASE_NAME);
-  }
-  const db = await dbPromise;
+function isStaleNativeDatabaseError(error: unknown) {
+  const message = String((error as { message?: unknown })?.message ?? error ?? '');
+  return (
+    message.includes('cannot be cast to type SharedObject<NativeDatabase>') ||
+    message.includes('SharedObject<NativeDatabase>') ||
+    message.includes('Unable to find the native shared object associated with given JavaScript object')
+  );
+}
+
+function resetDatabaseHandle() {
+  dbPromise = null;
+  schemaReady = false;
+}
+
+async function openAndPrepareDatabase() {
+  const db = await openDatabaseAsync(DATABASE_NAME);
   await ensureSchema(db);
   return db;
+}
+
+async function getPreparedDatabase() {
+  if (!dbPromise) {
+    dbPromise = openAndPrepareDatabase();
+  }
+
+  try {
+    const db = await dbPromise;
+    // Healthcheck leve para evitar retorno de handle nativo stale.
+    await db.getFirstAsync<{ ok: number }>('SELECT 1 AS ok');
+    return db;
+  } catch (error) {
+    if (!isStaleNativeDatabaseError(error)) {
+      throw error;
+    }
+
+    resetDatabaseHandle();
+    dbPromise = openAndPrepareDatabase();
+    const db = await dbPromise;
+    await db.getFirstAsync<{ ok: number }>('SELECT 1 AS ok');
+    return db;
+  }
+}
+
+async function withDatabaseRetry<T>(operation: (db: SQLiteDatabase) => Promise<T>) {
+  const db = await getPreparedDatabase();
+  try {
+    return await operation(db);
+  } catch (error) {
+    if (!isStaleNativeDatabaseError(error)) {
+      throw error;
+    }
+
+    resetDatabaseHandle();
+    const freshDb = await getPreparedDatabase();
+    return operation(freshDb);
+  }
+}
+
+function callDatabaseMethod<T>(
+  db: SQLiteDatabase,
+  method: 'runAsync' | 'getAllAsync' | 'getFirstAsync',
+  source: string,
+  params: unknown[]
+) {
+  return Reflect.apply(
+    (db as unknown as Record<string, (...args: unknown[]) => unknown>)[method],
+    db,
+    [source, ...params]
+  ) as T;
+}
+
+function buildDatabaseClient(): LocalDbClient {
+  if (dbClient) {
+    return dbClient;
+  }
+
+  dbClient = {
+    execAsync(source) {
+      return withDatabaseRetry((db) => db.execAsync(source));
+    },
+    runAsync(source, ...params) {
+      return withDatabaseRetry((db) =>
+        callDatabaseMethod<ReturnType<SQLiteDatabase['runAsync']>>(db, 'runAsync', source, params)
+      );
+    },
+    getAllAsync(source, ...params) {
+      return withDatabaseRetry((db) =>
+        callDatabaseMethod<ReturnType<SQLiteDatabase['getAllAsync']>>(db, 'getAllAsync', source, params)
+      );
+    },
+    getFirstAsync(source, ...params) {
+      return withDatabaseRetry((db) =>
+        callDatabaseMethod<ReturnType<SQLiteDatabase['getFirstAsync']>>(db, 'getFirstAsync', source, params)
+      );
+    },
+    withTransactionAsync(task) {
+      return withDatabaseRetry((db) => db.withTransactionAsync(task));
+    }
+  };
+
+  return dbClient;
+}
+
+export async function getLocalDb() {
+  return buildDatabaseClient();
 }
 
 export async function initializeLocalDb() {
@@ -748,4 +853,46 @@ export async function isInitialSyncDone() {
 
 export async function setInitialSyncDone(done: boolean) {
   await setAppSetting(SETTINGS_KEY_INITIAL_SYNC_DONE, done ? '1' : '0');
+}
+
+export async function getLastImportedRouteIds() {
+  const rawValue = await getAppSetting(SETTINGS_KEY_LAST_IMPORTED_ROUTE_IDS);
+  if (!rawValue) {
+    return [] as number[];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [] as number[];
+    }
+    return normalizeRouteIds(parsed);
+  } catch {
+    return [] as number[];
+  }
+}
+
+export async function setLastImportedRouteIds(routeIds: number[]) {
+  const normalized = normalizeRouteIds(routeIds);
+  await setAppSetting(SETTINGS_KEY_LAST_IMPORTED_ROUTE_IDS, JSON.stringify(normalized));
+  return normalized;
+}
+
+export async function removeLastImportedRouteId(routeId: number) {
+  const normalizedRouteId = Math.trunc(Number(routeId));
+  if (!Number.isFinite(normalizedRouteId) || normalizedRouteId <= 0) {
+    return;
+  }
+
+  const currentRouteIds = await getLastImportedRouteIds();
+  if (currentRouteIds.length === 0) {
+    return;
+  }
+
+  const nextRouteIds = currentRouteIds.filter((id) => id !== normalizedRouteId);
+  if (nextRouteIds.length === currentRouteIds.length) {
+    return;
+  }
+
+  await setLastImportedRouteIds(nextRouteIds);
 }

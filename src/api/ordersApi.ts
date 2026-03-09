@@ -8,8 +8,11 @@ import * as XLSX from 'xlsx';
 import { ImportResult, Waypoint } from './types';
 import {
   enqueueSyncOperation,
+  getAppSetting,
   getLocalDb,
   replaceLocalRouteWaypoints,
+  setAppSetting,
+  setLastImportedRouteIds,
   upsertLocalRoute
 } from '../offline/localDb';
 import { loadAuthSession } from '../utils/authStorage';
@@ -31,6 +34,28 @@ type ImportPoint = {
   title?: string;
   subtitle?: string;
 };
+
+const IMPORT_LAYOUT_CHANGED_MESSAGE =
+  'O layout do arquivo Excel mudou. Não é possível importar! Entre em contato com o Administrador do Sistema.';
+const IMPORT_LAYOUT_VALIDATION_UNAVAILABLE_MESSAGE =
+  'Não foi possível validar o layout do arquivo Excel. Tente novamente.';
+const IMPORT_LAYOUT_CACHE_KEY = 'import_layout_columns_cache_v2';
+const DEFAULT_IMPORT_LAYOUT_COLUMNS = [
+  'Waybill Number',
+  'LP No.',
+  'The destination city',
+  'Zip Code',
+  'Detailed address',
+  'Receiver to Latitude',
+  'Receiver to Longitude',
+  'Actual delivery Latitude',
+  'Actual delivery  Longitude',
+  'Delivery Gap Distance',
+  'Contact Name',
+  'Contact Phone',
+  'Contact Phone',
+  'Mail'
+];
 
 async function readBlobAsBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -67,6 +92,16 @@ async function readFileAsUtf8(file: LocalFile) {
   return FileSystem.readAsStringAsync(file.uri, {
     encoding: FileSystem.EncodingType.UTF8
   });
+}
+
+async function readXlsxWorkbook(file: LocalFile): Promise<XLSX.WorkBook> {
+  if (file.webFile) {
+    const buffer = await file.webFile.arrayBuffer();
+    return XLSX.read(buffer, { type: 'array' });
+  }
+
+  const base64 = await readFileAsBase64(file);
+  return XLSX.read(base64, { type: 'base64' });
 }
 
 function parseCsvLine(line: string) {
@@ -140,14 +175,7 @@ function parseJsonRows(raw: string): ImportRow[] {
 }
 
 async function parseXlsxRows(file: LocalFile): Promise<ImportRow[]> {
-  let workbook: XLSX.WorkBook;
-  if (file.webFile) {
-    const buffer = await file.webFile.arrayBuffer();
-    workbook = XLSX.read(buffer, { type: 'array' });
-  } else {
-    const base64 = await readFileAsBase64(file);
-    workbook = XLSX.read(base64, { type: 'base64' });
-  }
+  const workbook = await readXlsxWorkbook(file);
 
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) {
@@ -166,6 +194,130 @@ async function parseXlsxRows(file: LocalFile): Promise<ImportRow[]> {
     throw new Error('Planilha vazia.');
   }
   return rows;
+}
+
+function normalizeLayoutColumnName(value: string) {
+  return value
+    .replace(/^\uFEFF/, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function normalizeLayoutColumnList(columnNames: string[]) {
+  return columnNames.map((entry) => normalizeLayoutColumnName(entry));
+}
+
+function sanitizeLayoutColumns(columnNames: string[]) {
+  return columnNames
+    .map((entry) => String(entry ?? '').trim())
+    .filter((entry) => entry.length > 0);
+}
+
+async function readCachedLayoutColumns() {
+  const raw = await getAppSetting(IMPORT_LAYOUT_CACHE_KEY);
+  if (!raw) {
+    return [] as string[];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [] as string[];
+    }
+    return sanitizeLayoutColumns(parsed.map((entry) => String(entry ?? '')));
+  } catch {
+    return [] as string[];
+  }
+}
+
+async function persistCachedLayoutColumns(columnNames: string[]) {
+  const sanitized = sanitizeLayoutColumns(columnNames);
+  if (sanitized.length === 0) {
+    return;
+  }
+  await setAppSetting(IMPORT_LAYOUT_CACHE_KEY, JSON.stringify(sanitized));
+}
+
+function extractCsvHeaderColumns(rawCsv: string) {
+  const firstHeaderLine = rawCsv
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  if (!firstHeaderLine) {
+    return [] as string[];
+  }
+
+  return parseCsvLine(firstHeaderLine)
+    .map((entry) => entry.trim().replace(/^\uFEFF/, ''))
+    .filter((entry) => entry.length > 0);
+}
+
+async function extractImportLayoutColumnNames(file: LocalFile) {
+  const filename = file.name.toLowerCase();
+  const mimetype = String(file.mimeType ?? '').toLowerCase();
+  const isExcelFile =
+    filename.endsWith('.xlsx') ||
+    filename.endsWith('.xls') ||
+    mimetype.includes('sheet') ||
+    mimetype.includes('excel');
+  const isJsonFile = filename.endsWith('.json') || mimetype.includes('json');
+
+  if (isJsonFile) {
+    return null;
+  }
+
+  if (!isExcelFile) {
+    const rawCsv = await readFileAsUtf8(file);
+    return extractCsvHeaderColumns(rawCsv);
+  }
+
+  const workbook = await readXlsxWorkbook(file);
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) {
+    return [] as string[];
+  }
+
+  const worksheet = workbook.Sheets[firstSheetName];
+  if (!worksheet) {
+    return [] as string[];
+  }
+
+  const csv = XLSX.utils.sheet_to_csv(worksheet, { blankrows: false });
+  return extractCsvHeaderColumns(csv);
+}
+
+async function validateImportLayout(file: LocalFile) {
+  let expectedColumns = await readCachedLayoutColumns();
+  if (expectedColumns.length === 0) {
+    expectedColumns = sanitizeLayoutColumns(DEFAULT_IMPORT_LAYOUT_COLUMNS);
+    if (expectedColumns.length > 0) {
+      await persistCachedLayoutColumns(expectedColumns);
+    }
+  }
+
+  if (expectedColumns.length === 0) {
+    throw new Error(IMPORT_LAYOUT_VALIDATION_UNAVAILABLE_MESSAGE);
+  }
+
+  const fileColumns = await extractImportLayoutColumnNames(file);
+  if (fileColumns === null) {
+    return;
+  }
+
+  const normalizedExpected = normalizeLayoutColumnList(expectedColumns);
+  const normalizedFile = normalizeLayoutColumnList(fileColumns);
+
+  const sameLength = normalizedExpected.length === normalizedFile.length;
+  const sameColumns =
+    sameLength && normalizedExpected.every((columnName, index) => columnName === normalizedFile[index]);
+
+  if (!sameColumns) {
+    throw new Error(IMPORT_LAYOUT_CHANGED_MESSAGE);
+  }
 }
 
 function normalizeHeader(value: string) {
@@ -350,6 +502,8 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
     ? Math.trunc(parsedEpsMeters)
     : 50;
 
+  await validateImportLayout(file);
+
   const rows = await parseImportRows(file);
   const points = extractImportPoints(rows);
   if (points.length === 0) {
@@ -460,6 +614,7 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
     user_id: driverId,
     auth_user_id: authUserId
   });
+  await setLastImportedRouteIds(routeIds);
 
   return {
     orders_created: rows.length,

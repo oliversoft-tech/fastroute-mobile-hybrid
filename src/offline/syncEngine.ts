@@ -4,10 +4,12 @@ import { buildFastRouteApiUrl } from '../config/api';
 import { enrichWaypointsWithAddressData, resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import {
   applyLocalWaypointReorder,
+  backfillPendingImportDriverId,
   SyncQueueItem,
   countPendingSyncOperations,
   deleteLocalRoute,
   getAppSetting,
+  getCurrentDriverId,
   getDailySyncTime,
   getLocalRoute,
   getLocalWaypoint,
@@ -22,6 +24,7 @@ import {
   mergeRouteSnapshot,
   saveRouteSnapshot,
   setAppSetting,
+  setCurrentDriverId,
   setInitialSyncDone,
   setLastDailySyncDate,
   setLastSyncAt,
@@ -59,6 +62,20 @@ interface ProcessPendingQueueResult {
   requiresRemoteOverwrite: boolean;
 }
 
+interface ProcessPendingQueueItemResult {
+  item: SyncQueueItem;
+  ok: boolean;
+  failedMessage: string | null;
+  pushed: boolean;
+  requiresRemoteOverwrite: boolean;
+}
+
+interface PendingQueueItemWithLocks {
+  item: SyncQueueItem;
+  lockKeys: string[];
+  queueIndex: number;
+}
+
 type SyncMutationEntityType = 'route' | 'route_waypoint';
 
 interface SyncMutation {
@@ -85,12 +102,23 @@ interface PushSingleMutationResult {
   recoveredDuplicateCreate?: boolean;
 }
 
+interface PushMutationsResult {
+  ok: boolean;
+  message?: string;
+  recoveredDuplicateCreate: boolean;
+}
+
 let syncInFlight: Promise<SyncResult> | null = null;
 const syncFinishedListeners = new Set<SyncFinishedListener>();
 const SYNC_TIMEOUT_MS = 180000;
-const SYNC_HTTP_TIMEOUT_MS = 120000;
+const SYNC_PULL_HTTP_TIMEOUT_MS = 45000;
+const SYNC_PUSH_HTTP_TIMEOUT_MS = 25000;
+const SYNC_CONNECTIVITY_PROBE_TIMEOUT_MS = 3000;
+const SYNC_PUSH_BATCH_SIZE = 30;
+const SYNC_QUEUE_WORKERS = 3;
 const MAX_TRANSIENT_PUSH_ATTEMPTS = 3;
-const TRANSIENT_PUSH_RETRY_DELAYS_MS = [1200, 2500];
+const TRANSIENT_PUSH_RETRY_BASE_DELAYS_MS = [700, 1400];
+const TRANSIENT_PUSH_RETRY_JITTER_MS = 500;
 const ROUTE_STATUS_RANK: Record<RouteStatus, number> = {
   CRIADA: 1,
   PENDENTE: 2,
@@ -288,6 +316,119 @@ function pickString(...values: unknown[]) {
   return undefined;
 }
 
+function decodeBase64UrlToUtf8(value: string) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const paddingSize = (4 - (normalized.length % 4)) % 4;
+  const padded = `${normalized}${'='.repeat(paddingSize)}`;
+
+  let bitsBuffer = 0;
+  let bitsCount = 0;
+  let binary = '';
+
+  for (const char of padded) {
+    if (char === '=') {
+      break;
+    }
+    const charIndex = alphabet.indexOf(char);
+    if (charIndex < 0) {
+      return null;
+    }
+
+    bitsBuffer = (bitsBuffer << 6) | charIndex;
+    bitsCount += 6;
+    if (bitsCount >= 8) {
+      bitsCount -= 8;
+      binary += String.fromCharCode((bitsBuffer >> bitsCount) & 0xff);
+    }
+  }
+
+  try {
+    const escaped = binary
+      .split('')
+      .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`)
+      .join('');
+    return decodeURIComponent(escaped);
+  } catch {
+    return binary;
+  }
+}
+
+function parseJwtPayload(token?: string | null): ApiRecord | null {
+  const normalizedToken = pickString(token);
+  if (!normalizedToken) {
+    return null;
+  }
+
+  const parts = normalizedToken.split('.');
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const payloadRaw = decodeBase64UrlToUtf8(parts[1]);
+  if (!payloadRaw) {
+    return null;
+  }
+
+  try {
+    return asRecord(JSON.parse(payloadRaw));
+  } catch {
+    return null;
+  }
+}
+
+function extractAuthUserIdFromToken(token?: string | null) {
+  const jwtPayload = parseJwtPayload(token);
+  if (!jwtPayload) {
+    return null;
+  }
+
+  return (
+    pickString(
+      jwtPayload.sub,
+      jwtPayload.auth_user_id,
+      jwtPayload.authUserId,
+      jwtPayload.user_id,
+      jwtPayload.userId
+    ) ?? null
+  );
+}
+
+async function resolveDriverIdentityForSync(
+  payload: Record<string, unknown>,
+  authSession: { userId?: string | null; token?: string | null } | null
+) {
+  const authUserIdFromPayload = pickString(payload.auth_user_id, payload.authUserId) ?? null;
+  const authUserIdFromSession = pickString(authSession?.userId) ?? null;
+  const authUserIdFromToken = extractAuthUserIdFromToken(
+    pickString(authSession?.token, getAuthAccessToken()) ?? null
+  );
+  const authUserId = authUserIdFromPayload ?? authUserIdFromSession ?? authUserIdFromToken;
+
+  let driverId =
+    toOptionalPositiveInt(payload.driver_id) ??
+    toOptionalPositiveInt(payload.driverId) ??
+    toOptionalPositiveInt(payload.user_id) ??
+    toOptionalPositiveInt(payload.userId) ??
+    toOptionalPositiveInt(authSession?.userId) ??
+    toOptionalPositiveInt(authUserId) ??
+    (await getCurrentDriverId());
+
+  if (!driverId && authUserId) {
+    const resolvedDriverId = await resolveDriverUserIdFromAuthId(authUserId);
+    driverId = toOptionalPositiveInt(resolvedDriverId);
+  }
+
+  if (driverId) {
+    await setCurrentDriverId(driverId).catch(() => null);
+  }
+
+  return {
+    driverId,
+    authUserId
+  };
+}
+
 function extractArray(value: unknown): unknown[] {
   if (Array.isArray(value)) {
     return value;
@@ -328,42 +469,140 @@ function normalizeWaypoint(raw: unknown, routeId: number, index: number): Waypoi
   }
 
   const address = asRecord(item.address);
-  const id = toPositiveInt(item.id ?? item.waypoint_id ?? item.waypointId, 0);
+  const id = toPositiveInt(item.id ?? item.waypoint_id ?? item.waypointId ?? item.stop_id, 0);
   if (!id) {
     return null;
   }
 
   const fallbackSeqOrder = index >= 0 ? index + 1 : 0;
   const seqOrder = toPositiveInt(item.seq_order ?? item.seqorder ?? item.seqOrder, fallbackSeqOrder);
-  const latitude = toNullableNumber(item.latitude ?? item.lat ?? address?.latitude ?? address?.lat);
+  const latitude = toNullableNumber(
+    item.latitude ??
+      item.lat ??
+      item.geo_lat ??
+      item.latlng_lat ??
+      item['Receiver to Latitude'] ??
+      item.receiver_to_latitude ??
+      address?.latitude ??
+      address?.lat
+  );
   const longitude = toNullableNumber(
     item.longitude ??
       item.long ??
       item.lng ??
       item.lon ??
+      item.geo_lng ??
+      item['Receiver to Longitude'] ??
+      item.receiver_to_longitude ??
       address?.longitude ??
       address?.lng ??
       address?.long
   );
+  const explicitTitle = pickString(
+    item.detailed_address,
+    item['detailed address'],
+    item['Detailed address'],
+    item['Detailed Address'],
+    item['Detailed address '],
+    item.detailedAddress,
+    item.full_address,
+    item['full address'],
+    item['Full address'],
+    item['Full Address'],
+    item.fullAddress,
+    item.formatted_address,
+    item['formatted address'],
+    item['Formatted address'],
+    item['Formatted Address'],
+    item.formattedAddress,
+    item['Receiver to Street'],
+    item.receiver_to_street,
+    item.title,
+    item.name,
+    item.address_text,
+    item.addressLine,
+    item.address_line,
+    address?.detailed_address,
+    address?.['detailed address'],
+    address?.['Detailed address'],
+    address?.detailedAddress,
+    address?.full_address,
+    address?.['full address'],
+    address?.['Full address'],
+    address?.fullAddress,
+    address?.formatted_address,
+    address?.['formatted address'],
+    address?.['Formatted address'],
+    address?.formattedAddress,
+    address?.title,
+    address?.name,
+    address?.address_text
+  );
+  const street = pickString(
+    item.street,
+    item.logradouro,
+    item.rua,
+    item.address,
+    address?.street,
+    address?.logradouro,
+    address?.rua,
+    address?.address
+  );
+  const number = pickString(item.number, item.numero, address?.number, address?.numero);
+  const district = pickString(
+    item.district,
+    item.neighborhood,
+    item.bairro,
+    address?.district,
+    address?.neighborhood,
+    address?.bairro
+  );
+  const city = pickString(item.city, item.cidade, address?.city, address?.cidade);
+  const state = pickString(item.state, item.uf, address?.state, address?.uf);
+  const zip = pickString(
+    item.zipcode,
+    item.zip_code,
+    item['Zip Code'],
+    item['zip code'],
+    item.cep,
+    address?.zipcode,
+    address?.zip_code,
+    address?.['Zip Code'],
+    address?.['zip code'],
+    address?.cep
+  );
+  const complement = pickString(item.complement, item.complemento, address?.complement, address?.complemento);
+  const streetLine = [street, number].filter(Boolean).join(', ').trim();
+  const regionParts = [district, city, state].filter(Boolean).join(' - ').trim();
+  const inferredTitle = explicitTitle ?? (streetLine || regionParts || undefined);
+  const inferredSubtitle =
+    pickString(item.subtitle, item.address_subtitle, item.description, item.desc, address?.subtitle, address?.city) ??
+    ([zip, regionParts, complement].filter(Boolean).join(' • ') || undefined);
 
-  const fallbackAddressId = index >= 0 ? id : 0;
+  // Do not infer address_id from waypoint id on pull payloads.
+  // If the backend omits address_id, we prefer keeping the existing local value during merge.
+  const fallbackAddressId = 0;
 
   return {
     id,
     route_id: toPositiveInt(item.route_id ?? item.routeId, routeId),
-    address_id: toPositiveInt(item.address_id ?? item.addressId ?? address?.id, fallbackAddressId),
+    address_id: toPositiveInt(
+      item.address_id ??
+        item.addressId ??
+        item['address id'] ??
+        item['Address ID'] ??
+        address?.id ??
+        address?.address_id ??
+        address?.addressId ??
+        address?.['address id'] ??
+        address?.['Address ID'],
+      fallbackAddressId
+    ),
     user_id: toNullableNumber(item.user_id ?? item.userId),
     seq_order: seqOrder,
     status: normalizeWaypointStatus(item.status),
-    title: pickString(
-      item.detailed_address,
-      item.title,
-      item.name,
-      address?.detailed_address,
-      address?.title,
-      address?.street
-    ),
-    subtitle: pickString(item.subtitle, item.address_subtitle, address?.subtitle, address?.city),
+    title: inferredTitle,
+    subtitle: inferredSubtitle,
     latitude,
     longitude
   };
@@ -424,6 +663,74 @@ function sortWaypoints(waypoints: Waypoint[]) {
   return [...waypoints].sort((a, b) => a.seq_order - b.seq_order || a.id - b.id);
 }
 
+function buildAddressSeqKey(waypoint: Pick<Waypoint, 'address_id' | 'seq_order'>) {
+  const addressId = toOptionalPositiveInt(waypoint.address_id);
+  const seqOrder = toOptionalPositiveInt(waypoint.seq_order);
+  if (!addressId || !seqOrder) {
+    return null;
+  }
+  return `${addressId}:${seqOrder}`;
+}
+
+function hydrateDetailedWaypointFields(baseWaypoints: Waypoint[], sourceWaypoints: Waypoint[]) {
+  if (baseWaypoints.length === 0 || sourceWaypoints.length === 0) {
+    return baseWaypoints;
+  }
+
+  const sourceById = new Map<number, Waypoint>();
+  const sourceByAddressSeq = new Map<string, Waypoint>();
+  const sourceByAddressId = new Map<number, Waypoint>();
+  const sourceByOrder = new Map<number, Waypoint>();
+
+  for (const source of sortWaypoints(sourceWaypoints)) {
+    if (!hasDetailedAddressTitle(source.title)) {
+      continue;
+    }
+
+    sourceById.set(source.id, source);
+    const key = buildAddressSeqKey(source);
+    if (key && !sourceByAddressSeq.has(key)) {
+      sourceByAddressSeq.set(key, source);
+    }
+
+    const addressId = toOptionalPositiveInt(source.address_id);
+    if (addressId && !sourceByAddressId.has(addressId)) {
+      sourceByAddressId.set(addressId, source);
+    }
+    const seqOrder = toOptionalPositiveInt(source.seq_order);
+    if (seqOrder && !sourceByOrder.has(seqOrder)) {
+      sourceByOrder.set(seqOrder, source);
+    }
+  }
+
+  return baseWaypoints.map((waypoint) => {
+    if (hasDetailedAddressTitle(waypoint.title)) {
+      return waypoint;
+    }
+
+    const sourceByWaypointId = sourceById.get(waypoint.id);
+    const key = buildAddressSeqKey(waypoint);
+    const sourceBySeq = key ? sourceByAddressSeq.get(key) : undefined;
+    const addressId = toOptionalPositiveInt(waypoint.address_id);
+    const sourceByAddress = addressId ? sourceByAddressId.get(addressId) : undefined;
+    const seqOrder = toOptionalPositiveInt(waypoint.seq_order);
+    const sourceByOrderMatch = seqOrder ? sourceByOrder.get(seqOrder) : undefined;
+    const source = sourceByWaypointId ?? sourceBySeq ?? sourceByAddress ?? sourceByOrderMatch;
+    if (!source || !hasDetailedAddressTitle(source.title)) {
+      return waypoint;
+    }
+
+    return {
+      ...waypoint,
+      address_id: toOptionalPositiveInt(waypoint.address_id) ?? toOptionalPositiveInt(source.address_id) ?? 0,
+      title: pickString(source.title) ?? waypoint.title,
+      subtitle: pickString(waypoint.subtitle) ?? pickString(source.subtitle),
+      latitude: toNullableNumber(waypoint.latitude) ?? toNullableNumber(source.latitude),
+      longitude: toNullableNumber(waypoint.longitude) ?? toNullableNumber(source.longitude)
+    };
+  });
+}
+
 function mergeWaypointDetails(existing: Waypoint | undefined, incoming: Waypoint): Waypoint {
   const incomingAddressId = toOptionalPositiveInt(incoming.address_id);
   const existingAddressId = toOptionalPositiveInt(existing?.address_id);
@@ -437,13 +744,23 @@ function mergeWaypointDetails(existing: Waypoint | undefined, incoming: Waypoint
   const existingLatitude = toNullableNumber(existing?.latitude);
   const incomingLongitude = toNullableNumber(incoming.longitude);
   const existingLongitude = toNullableNumber(existing?.longitude);
+  const incomingHasDetailedTitle = hasDetailedAddressTitle(incomingTitle);
+  const existingHasDetailedTitle = hasDetailedAddressTitle(existingTitle);
+
+  let resolvedTitle = incomingTitle ?? existingTitle;
+  if (!incomingHasDetailedTitle && existingHasDetailedTitle) {
+    resolvedTitle = existingTitle;
+  }
+  if (incomingHasDetailedTitle) {
+    resolvedTitle = incomingTitle;
+  }
 
   return {
     ...incoming,
     address_id: incomingAddressId ?? existingAddressId ?? 0,
     user_id: incoming.user_id ?? existing?.user_id,
     seq_order: incomingSeqOrder ?? existingSeqOrder ?? 0,
-    title: incomingTitle ?? existingTitle,
+    title: resolvedTitle,
     subtitle: incomingSubtitle ?? existingSubtitle,
     latitude: incomingLatitude ?? existingLatitude,
     longitude: incomingLongitude ?? existingLongitude
@@ -484,13 +801,35 @@ function mergeRouteDetails(existing: RouteDetail | undefined, incoming: RouteDet
 
 async function hydrateRoutesFromLegacyRouteSnapshotEndpoint() {
   const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'), {
-    timeout: SYNC_HTTP_TIMEOUT_MS
+    timeout: SYNC_PULL_HTTP_TIMEOUT_MS
   });
   if (!isPayloadOk(routeSnapshotResponse.data)) {
     return [] as RouteDetail[];
   }
 
   return extractRoutesFromPullResponse(routeSnapshotResponse.data);
+}
+
+async function hydrateRouteByIdFromLegacyRouteEndpoint(routeId: number) {
+  const normalizedRouteId = toPositiveInt(routeId, 0);
+  if (!normalizedRouteId) {
+    return null;
+  }
+
+  const routeSnapshotResponse = await httpClient.get(buildFastRouteApiUrl('/route'), {
+    params: { route_id: normalizedRouteId },
+    timeout: SYNC_PULL_HTTP_TIMEOUT_MS
+  });
+  if (!isPayloadOk(routeSnapshotResponse.data)) {
+    return null;
+  }
+
+  const routes = extractRoutesFromPullResponse(routeSnapshotResponse.data);
+  if (routes.length === 0) {
+    return null;
+  }
+
+  return routes.find((entry) => entry.id === normalizedRouteId) ?? routes[0];
 }
 
 function normalizeRoute(raw: unknown): RouteDetail | null {
@@ -513,6 +852,8 @@ function normalizeRoute(raw: unknown): RouteDetail | null {
       ? extractArray(item.waypoints)
       : extractArray(item.route_waypoints).length > 0
         ? extractArray(item.route_waypoints)
+        : extractArray(item.paradas).length > 0
+          ? extractArray(item.paradas)
         : extractArray(item.stops).length > 0
           ? extractArray(item.stops)
           : extractArray(item.points);
@@ -655,6 +996,30 @@ async function enrichRoutesWithDetailedAddress(routes: RouteDetail[]) {
     return routes;
   }
 
+  let legacySnapshotPromise: Promise<RouteDetail[] | null> | null = null;
+  const legacyRouteByIdPromises = new Map<number, Promise<RouteDetail | null>>();
+  const loadLegacySnapshot = async () => {
+    if (!legacySnapshotPromise) {
+      legacySnapshotPromise = hydrateRoutesFromLegacyRouteSnapshotEndpoint()
+        .then((snapshot) => snapshot)
+        .catch(() => null);
+    }
+    return legacySnapshotPromise;
+  };
+  const loadLegacyRouteById = async (routeId: number) => {
+    const normalizedRouteId = toPositiveInt(routeId, 0);
+    if (!normalizedRouteId) {
+      return null;
+    }
+    if (!legacyRouteByIdPromises.has(normalizedRouteId)) {
+      legacyRouteByIdPromises.set(
+        normalizedRouteId,
+        hydrateRouteByIdFromLegacyRouteEndpoint(normalizedRouteId).catch(() => null)
+      );
+    }
+    return legacyRouteByIdPromises.get(normalizedRouteId) ?? null;
+  };
+
   const enrichedRoutes = await Promise.all(
     routes.map(async (route) => {
       const baseWaypoints = route.waypoints ?? [];
@@ -667,16 +1032,33 @@ async function enrichRoutesWithDetailedAddress(routes: RouteDetail[]) {
         return route;
       }
 
+      let resolvedWaypoints = baseWaypoints;
       try {
-        const enrichedWaypoints = await enrichWaypointsWithAddressData(baseWaypoints);
-        return {
-          ...route,
-          waypoints: enrichedWaypoints,
-          waypoints_count: enrichedWaypoints.length
-        };
+        resolvedWaypoints = await enrichWaypointsWithAddressData(baseWaypoints);
       } catch {
-        return route;
+        resolvedWaypoints = baseWaypoints;
       }
+
+      if (resolvedWaypoints.some((waypoint) => !hasDetailedAddressTitle(waypoint.title))) {
+        const legacyRoutes = await loadLegacySnapshot();
+        const legacyRoute = legacyRoutes?.find((entry) => entry.id === route.id);
+        if (legacyRoute?.waypoints?.length) {
+          resolvedWaypoints = hydrateDetailedWaypointFields(resolvedWaypoints, legacyRoute.waypoints);
+        }
+      }
+
+      if (resolvedWaypoints.some((waypoint) => !hasDetailedAddressTitle(waypoint.title))) {
+        const legacyRouteById = await loadLegacyRouteById(route.id);
+        if (legacyRouteById?.waypoints?.length) {
+          resolvedWaypoints = hydrateDetailedWaypointFields(resolvedWaypoints, legacyRouteById.waypoints);
+        }
+      }
+
+      return {
+        ...route,
+        waypoints: resolvedWaypoints,
+        waypoints_count: Math.max(route.waypoints_count ?? 0, resolvedWaypoints.length)
+      };
     })
   );
 
@@ -801,17 +1183,30 @@ function isTransientPushFailureMessage(message: string) {
 }
 
 function getTransientPushRetryDelayMs(attemptIndex: number) {
+  const jitter = Math.trunc(Math.random() * (TRANSIENT_PUSH_RETRY_JITTER_MS + 1));
+
   if (attemptIndex < 0) {
-    return TRANSIENT_PUSH_RETRY_DELAYS_MS[0];
+    return TRANSIENT_PUSH_RETRY_BASE_DELAYS_MS[0] + jitter;
   }
-  const boundedIndex = Math.min(attemptIndex, TRANSIENT_PUSH_RETRY_DELAYS_MS.length - 1);
-  return TRANSIENT_PUSH_RETRY_DELAYS_MS[boundedIndex];
+  const boundedIndex = Math.min(attemptIndex, TRANSIENT_PUSH_RETRY_BASE_DELAYS_MS.length - 1);
+  return TRANSIENT_PUSH_RETRY_BASE_DELAYS_MS[boundedIndex] + jitter;
 }
 
 function waitForMs(ms: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function splitIntoChunks<T>(items: T[], chunkSize: number) {
+  const size = Math.max(1, Math.trunc(Number(chunkSize)));
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
 }
 
 function normalizePushStatus(value: unknown) {
@@ -1032,29 +1427,44 @@ async function buildMutationsForQueueItem(
     }
     case 'IMPORT_ROUTE_FILE': {
       const authSession = await loadAuthSession().catch(() => null);
-      const authUserIdFromSession = pickString(authSession?.userId) ?? null;
-      const authUserIdFromPayload = pickString(payload.auth_user_id, payload.authUserId) ?? null;
-      const authUserId = authUserIdFromPayload ?? authUserIdFromSession;
       const routeIds = extractImportRouteIds(payload);
 
       if (routeIds.length === 0) {
         throw new Error('Falha no sync: payload de IMPORT_ROUTE_FILE sem route_ids válidos.');
       }
 
-      let driverId =
-        toOptionalPositiveInt(payload.driver_id) ??
-        toOptionalPositiveInt(payload.driverId) ??
-        toOptionalPositiveInt(payload.user_id) ??
-        toOptionalPositiveInt(payload.userId) ??
-        toOptionalPositiveInt(authSession?.userId) ??
-        toOptionalPositiveInt(authUserId);
+      const localWaypointsByRouteId = new Map<number, Waypoint[]>();
+      const listRouteWaypoints = async (routeId: number) => {
+        if (!localWaypointsByRouteId.has(routeId)) {
+          localWaypointsByRouteId.set(routeId, await listLocalWaypoints(routeId));
+        }
+        return localWaypointsByRouteId.get(routeId) ?? [];
+      };
 
-      if (!driverId && authUserId) {
-        try {
-          const resolvedDriverId = await resolveDriverUserIdFromAuthId(authUserId);
-          driverId = toOptionalPositiveInt(resolvedDriverId);
-        } catch (error) {
-          throw new Error(`Falha no sync: erro ao resolver driver_id via auth_user_id: ${getApiError(error)}`);
+      let driverId: number | null = null;
+      let authUserId: string | null = null;
+      try {
+        const resolvedIdentity = await resolveDriverIdentityForSync(payload, authSession);
+        driverId = resolvedIdentity.driverId;
+        authUserId = resolvedIdentity.authUserId;
+      } catch (error) {
+        throw new Error(`Falha no sync: erro ao resolver driver_id via auth_user_id: ${getApiError(error)}`);
+      }
+
+      if (!driverId) {
+        for (const routeId of routeIds) {
+          const routeWaypoints = await listRouteWaypoints(routeId);
+          const driverIdFromWaypoint = routeWaypoints.reduce<number | null>((resolved, waypoint) => {
+            if (resolved) {
+              return resolved;
+            }
+            return toOptionalPositiveInt(waypoint.user_id);
+          }, null);
+          if (driverIdFromWaypoint) {
+            driverId = driverIdFromWaypoint;
+            await setCurrentDriverId(driverIdFromWaypoint).catch(() => null);
+            break;
+          }
         }
       }
 
@@ -1083,7 +1493,7 @@ async function buildMutationsForQueueItem(
           continue;
         }
 
-        const localWaypoints = await listLocalWaypoints(routeId);
+        const localWaypoints = await listRouteWaypoints(routeId);
         const routeClusterId =
           toOptionalPositiveInt(localRoute.cluster_id) ??
           toOptionalPositiveInt(payload.cluster_id) ??
@@ -1106,7 +1516,7 @@ async function buildMutationsForQueueItem(
           await pushWaypointMutation(waypoint.id, 'CREATE', {
             id: waypoint.id,
             route_id: routeId,
-            user_id: waypoint.user_id ?? driverId ?? null,
+            user_id: toOptionalPositiveInt(waypoint.user_id) ?? driverId,
             address_id: waypoint.address_id ?? null,
             seq_order: waypoint.seq_order ?? 0,
             status: mapQueuedWaypointStatusToServer(waypoint.status),
@@ -1203,7 +1613,7 @@ async function isImportRetryFullyPersistedRemotely(
     try {
       const response = await httpClient.get(buildFastRouteApiUrl('/route'), {
         params: routeId ? { route_id: routeId } : undefined,
-        timeout: SYNC_HTTP_TIMEOUT_MS
+        timeout: SYNC_PULL_HTTP_TIMEOUT_MS
       });
       if (!isPayloadOk(response.data)) {
         return [];
@@ -1329,7 +1739,7 @@ async function isImportRetryFullyPersistedRemotely(
       const response = await httpClient.post(
         buildFastRouteApiUrl('/sync/pull'),
         { sinceTs: '1970-01-01T00:00:00.000Z' },
-        { timeout: SYNC_HTTP_TIMEOUT_MS }
+        { timeout: SYNC_PULL_HTTP_TIMEOUT_MS }
       );
       if (!isPayloadOk(response.data)) {
         return [];
@@ -1558,7 +1968,7 @@ async function pushSingleMutation(mutation: SyncMutation): Promise<PushSingleMut
             ]
           },
           {
-            timeout: SYNC_HTTP_TIMEOUT_MS
+            timeout: SYNC_PUSH_HTTP_TIMEOUT_MS
           }
         );
         data = response.data;
@@ -1653,6 +2063,338 @@ async function pushSingleMutation(mutation: SyncMutation): Promise<PushSingleMut
   return { ok: false, message: 'Falha desconhecida ao aplicar mutação pendente.' };
 }
 
+async function pushMutationsIndividually(mutations: SyncMutation[]): Promise<PushMutationsResult> {
+  let recoveredDuplicateCreate = false;
+
+  for (const mutation of mutations) {
+    const mutationResult = await pushSingleMutation(mutation);
+    if (!mutationResult.ok) {
+      return {
+        ok: false,
+        message: mutationResult.message ?? 'Falha ao sincronizar mutação pendente.',
+        recoveredDuplicateCreate
+      };
+    }
+
+    if (mutationResult.recoveredDuplicateCreate) {
+      recoveredDuplicateCreate = true;
+    }
+  }
+
+  return { ok: true, recoveredDuplicateCreate };
+}
+
+async function pushMutationBatch(mutations: SyncMutation[]): Promise<PushMutationsResult> {
+  if (mutations.length === 0) {
+    return { ok: true, recoveredDuplicateCreate: false };
+  }
+
+  if (mutations.length === 1) {
+    const mutationResult = await pushSingleMutation(mutations[0]);
+    return {
+      ok: mutationResult.ok,
+      message: mutationResult.message,
+      recoveredDuplicateCreate: Boolean(mutationResult.recoveredDuplicateCreate)
+    };
+  }
+
+  const mutationById = new Map<string, SyncMutation>(mutations.map((entry) => [entry.mutationId, entry]));
+  const currentBaseVersionById = new Map<string, number>(mutations.map((entry) => [entry.mutationId, entry.baseVersion]));
+
+  retryTransient: for (let transientAttempt = 0; transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS; transientAttempt += 1) {
+    let pendingMutationIds = mutations.map((entry) => entry.mutationId);
+    let pendingMutations = mutations;
+
+    for (let conflictAttempt = 0; conflictAttempt < 2; conflictAttempt += 1) {
+      let data: unknown;
+      try {
+        const response = await httpClient.post(
+          buildFastRouteApiUrl('/sync/push'),
+          {
+            mutations: pendingMutations.map((mutation) => ({
+              deviceId: mutation.deviceId,
+              mutationId: mutation.mutationId,
+              entityType: mutation.entityType,
+              entityId: mutation.entityId,
+              op: mutation.op,
+              baseVersion: currentBaseVersionById.get(mutation.mutationId) ?? mutation.baseVersion,
+              payload: mutation.payload
+            }))
+          },
+          {
+            timeout: SYNC_PUSH_HTTP_TIMEOUT_MS
+          }
+        );
+        data = response.data;
+      } catch (error) {
+        const failureMessage = getApiError(error);
+        if (
+          isTransientPushFailureMessage(failureMessage) &&
+          transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS - 1
+        ) {
+          await waitForMs(getTransientPushRetryDelayMs(transientAttempt));
+          continue retryTransient;
+        }
+
+        // Fallback de compatibilidade: em alguns ambientes o backend pode não
+        // devolver resultado granular no batch. Nesse caso volta ao fluxo já estável.
+        return pushMutationsIndividually(mutations);
+      }
+
+      if (!isPayloadOk(data)) {
+        const failureMessage = readErrorMessage(data, 'Falha ao sincronizar mutações pendentes.');
+        if (
+          isTransientPushFailureMessage(failureMessage) &&
+          transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS - 1
+        ) {
+          await waitForMs(getTransientPushRetryDelayMs(transientAttempt));
+          continue retryTransient;
+        }
+        return pushMutationsIndividually(mutations);
+      }
+
+      const root = asRecord(data);
+      const rawResults = Array.isArray(root?.results) ? root?.results : [];
+      const parsedResultsByMutationId = new Map<string, SyncPushMutationResult>();
+      for (const entry of rawResults) {
+        const parsed = readPushMutationResult(entry);
+        if (!parsed?.mutationId) {
+          continue;
+        }
+        parsedResultsByMutationId.set(parsed.mutationId, parsed);
+      }
+
+      // Se faltar qualquer resultado, usa fallback seguro por mutação.
+      const missingResult = pendingMutationIds.some((mutationId) => !parsedResultsByMutationId.has(mutationId));
+      if (missingResult) {
+        return pushMutationsIndividually(mutations);
+      }
+
+      const conflictedMutationIds: string[] = [];
+      for (const mutationId of pendingMutationIds) {
+        const mutation = mutationById.get(mutationId);
+        const parsedResult = parsedResultsByMutationId.get(mutationId);
+        if (!mutation || !parsedResult) {
+          return pushMutationsIndividually(mutations);
+        }
+
+        const normalizedStatus = normalizePushStatus(parsedResult.status);
+        const currentBaseVersion = currentBaseVersionById.get(mutationId) ?? mutation.baseVersion;
+
+        if (normalizedStatus === 'APPLIED') {
+          await setStoredEntityVersion(mutation.entityType, mutation.entityId, currentBaseVersion + 1);
+          continue;
+        }
+
+        if (normalizedStatus === 'DUPLICATE') {
+          continue;
+        }
+
+        if (normalizedStatus === 'NOT_FOUND' && mutation.allowNotFound) {
+          continue;
+        }
+
+        if (normalizedStatus === 'NOT_FOUND' && normalizeText(mutation.op).includes('CREATE')) {
+          return {
+            ok: false,
+            message:
+              'Falha no sync: backend não suporta criação de rotas/waypoints via /sync/push. Atualize o backend para aceitar mutações CREATE.',
+            recoveredDuplicateCreate: false
+          };
+        }
+
+        if (
+          normalizedStatus === 'CONFLICT' &&
+          conflictAttempt === 0 &&
+          Number.isFinite(parsedResult.serverVersion) &&
+          (parsedResult.serverVersion ?? -1) >= 0
+        ) {
+          const serverVersion = Math.trunc(parsedResult.serverVersion ?? currentBaseVersion);
+          currentBaseVersionById.set(mutationId, serverVersion);
+          await setStoredEntityVersion(mutation.entityType, mutation.entityId, serverVersion);
+          conflictedMutationIds.push(mutationId);
+          continue;
+        }
+
+        const serverVersionMessage = Number.isFinite(parsedResult.serverVersion)
+          ? ` (serverVersion=${parsedResult.serverVersion})`
+          : '';
+        return {
+          ok: false,
+          message: `Mutação ${mutation.mutationId} rejeitada com status ${normalizedStatus}${serverVersionMessage}.`,
+          recoveredDuplicateCreate: false
+        };
+      }
+
+      if (conflictedMutationIds.length === 0) {
+        return { ok: true, recoveredDuplicateCreate: false };
+      }
+
+      pendingMutationIds = conflictedMutationIds;
+      pendingMutations = conflictedMutationIds
+        .map((mutationId) => mutationById.get(mutationId))
+        .filter((entry): entry is SyncMutation => Boolean(entry));
+    }
+  }
+
+  return pushMutationsIndividually(mutations);
+}
+
+async function pushMutationsInBatches(mutations: SyncMutation[]): Promise<PushMutationsResult> {
+  if (mutations.length === 0) {
+    return { ok: true, recoveredDuplicateCreate: false };
+  }
+
+  let recoveredDuplicateCreate = false;
+  const chunks = splitIntoChunks(mutations, SYNC_PUSH_BATCH_SIZE);
+  for (const chunk of chunks) {
+    const chunkResult = await pushMutationBatch(chunk);
+    if (!chunkResult.ok) {
+      return {
+        ok: false,
+        message: chunkResult.message ?? 'Falha ao sincronizar mutações pendentes.',
+        recoveredDuplicateCreate: recoveredDuplicateCreate || chunkResult.recoveredDuplicateCreate
+      };
+    }
+    if (chunkResult.recoveredDuplicateCreate) {
+      recoveredDuplicateCreate = true;
+    }
+  }
+
+  return { ok: true, recoveredDuplicateCreate };
+}
+
+function normalizeLockKeys(lockKeys: string[]) {
+  return [...new Set(
+    lockKeys
+      .map((key) => key.trim())
+      .filter((key) => key.length > 0)
+  )].sort();
+}
+
+async function resolveQueueItemLockKeys(item: SyncQueueItem) {
+  const payload = item.payload ?? {};
+  const lockKeys: string[] = [];
+
+  switch (item.opType) {
+    case 'IMPORT_ROUTE_FILE': {
+      const routeIds = extractImportRouteIds(payload);
+      for (const routeId of routeIds) {
+        lockKeys.push(`route:${routeId}`);
+      }
+
+      const importId = toOptionalPositiveInt(payload.import_id ?? payload.importId);
+      if (importId) {
+        lockKeys.push(`import:${importId}`);
+      }
+
+      if (lockKeys.length === 0) {
+        lockKeys.push(`import-queue:${item.id}`);
+      }
+      break;
+    }
+    case 'START_ROUTE':
+    case 'FINISH_ROUTE':
+    case 'REORDER_WAYPOINTS':
+    case 'DELETE_ROUTE': {
+      const routeId = toQueueRouteId(payload);
+      if (routeId) {
+        lockKeys.push(`route:${routeId}`);
+      }
+      break;
+    }
+    case 'UPDATE_WAYPOINT_STATUS': {
+      const payloadRouteId = toQueueRouteId(payload);
+      if (payloadRouteId) {
+        lockKeys.push(`route:${payloadRouteId}`);
+        break;
+      }
+
+      const waypointId = toQueueWaypointId(payload);
+      if (!waypointId) {
+        break;
+      }
+
+      const localWaypoint = await getLocalWaypoint(waypointId);
+      const localRouteId = toOptionalPositiveInt(localWaypoint?.route_id);
+      if (localRouteId) {
+        lockKeys.push(`route:${localRouteId}`);
+      } else {
+        lockKeys.push(`waypoint:${waypointId}`);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+
+  if (lockKeys.length === 0) {
+    lockKeys.push(`queue:${item.id}`);
+  }
+
+  return normalizeLockKeys(lockKeys);
+}
+
+async function processPendingQueueItem(
+  item: SyncQueueItem,
+  deviceId: string
+): Promise<ProcessPendingQueueItemResult> {
+  try {
+    const mutations = await buildMutationsForQueueItem(item, deviceId);
+
+    if (mutations.length === 0) {
+      await markSyncOperationDone(item.id);
+      return {
+        item,
+        ok: true,
+        failedMessage: null,
+        pushed: true,
+        requiresRemoteOverwrite: false
+      };
+    }
+
+    let itemFailedMessage: string | null = null;
+    let recoveredDuplicateCreate = false;
+    const pushResult = await pushMutationsInBatches(mutations);
+    if (!pushResult.ok) {
+      itemFailedMessage = pushResult.message ?? 'Falha ao sincronizar mutação pendente.';
+    }
+    if (pushResult.recoveredDuplicateCreate) {
+      recoveredDuplicateCreate = true;
+    }
+
+    if (itemFailedMessage) {
+      await markSyncOperationFailed(item.id, itemFailedMessage);
+      return {
+        item,
+        ok: false,
+        failedMessage: itemFailedMessage,
+        pushed: false,
+        requiresRemoteOverwrite: false
+      };
+    }
+
+    await markSyncOperationDone(item.id);
+    return {
+      item,
+      ok: true,
+      failedMessage: null,
+      pushed: true,
+      requiresRemoteOverwrite: recoveredDuplicateCreate && item.opType === 'IMPORT_ROUTE_FILE'
+    };
+  } catch (error) {
+    const message = getApiError(error);
+    await markSyncOperationFailed(item.id, message);
+    return {
+      item,
+      ok: false,
+      failedMessage: message,
+      pushed: false,
+      requiresRemoteOverwrite: false
+    };
+  }
+}
+
 function notifySyncFinished(result: SyncResult) {
   syncFinishedListeners.forEach((listener) => {
     try {
@@ -1664,6 +2406,16 @@ function notifySyncFinished(result: SyncResult) {
 }
 
 async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
+  const authSession = await loadAuthSession().catch(() => null);
+  try {
+    const identity = await resolveDriverIdentityForSync({}, authSession);
+    if (identity.driverId) {
+      await backfillPendingImportDriverId(identity.driverId);
+    }
+  } catch {
+    // Mantém fluxo de sync mesmo quando não for possível resolver motorista para backfill da fila.
+  }
+
   const pending = await listPendingSyncOperations(500);
   if (pending.length === 0) {
     return {
@@ -1676,70 +2428,109 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
   }
 
   const deviceId = await getSyncDeviceId();
-  const pushedItems: SyncQueueItem[] = [];
-  let processed = 0;
+  const pendingWithLocks: PendingQueueItemWithLocks[] = [];
+  for (const [queueIndex, item] of pending.entries()) {
+    pendingWithLocks.push({
+      item,
+      lockKeys: await resolveQueueItemLockKeys(item),
+      queueIndex
+    });
+  }
+
+  const results: Array<{
+    queueIndex: number;
+    result: ProcessPendingQueueItemResult;
+  }> = [];
+  const activeLocks = new Set<string>();
+  const started = new Set<number>();
+  const completed = new Set<number>();
+  let nextCursor = 0;
+  let firstFailureQueueIndex = Number.POSITIVE_INFINITY;
   let firstFailureMessage: string | null = null;
-  let requiresRemoteOverwrite = false;
+  let shouldStopScheduling = false;
 
-  for (const item of pending) {
-    try {
-      const mutations = await buildMutationsForQueueItem(item, deviceId);
+  const canStartEntry = (entry: PendingQueueItemWithLocks) => {
+    if (entry.lockKeys.length === 0) {
+      return true;
+    }
+    return entry.lockKeys.every((key) => !activeLocks.has(key));
+  };
 
-      if (mutations.length === 0) {
-        await markSyncOperationDone(item.id);
-        processed += 1;
-        pushedItems.push(item);
+  const reserveLocks = (entry: PendingQueueItemWithLocks) => {
+    for (const key of entry.lockKeys) {
+      activeLocks.add(key);
+    }
+  };
+
+  const releaseLocks = (entry: PendingQueueItemWithLocks) => {
+    for (const key of entry.lockKeys) {
+      activeLocks.delete(key);
+    }
+  };
+
+  const claimNextEntry = () => {
+    for (let index = nextCursor; index < pendingWithLocks.length; index += 1) {
+      if (started.has(index)) {
         continue;
       }
-
-      let itemFailedMessage: string | null = null;
-      let recoveredDuplicateCreate = false;
-      const createMutationsForItem = mutations.filter((mutation) =>
-        normalizeText(mutation.op).includes('CREATE')
-      );
-      for (const mutation of mutations) {
-        const mutationResult = await pushSingleMutation(mutation);
-        if (!mutationResult.ok) {
-          itemFailedMessage = mutationResult.message ?? 'Falha ao sincronizar mutação pendente.';
-          break;
-        }
-        if (mutationResult.recoveredDuplicateCreate) {
-          recoveredDuplicateCreate = true;
+      const entry = pendingWithLocks[index];
+      if (!canStartEntry(entry)) {
+        continue;
+      }
+      started.add(index);
+      reserveLocks(entry);
+      if (index === nextCursor) {
+        while (nextCursor < pendingWithLocks.length && started.has(nextCursor)) {
+          nextCursor += 1;
         }
       }
-
-      if (!itemFailedMessage && recoveredDuplicateCreate && item.opType === 'IMPORT_ROUTE_FILE') {
-        // Se todas as mutações CREATE deste item retornaram APPLIED ou DUPLICATE
-        // no /sync/push individual, considera persistência remota confirmada e
-        // força fullPull para sobrescrever o local com o estado autoritativo.
-        requiresRemoteOverwrite = true;
-      }
-
-      if (itemFailedMessage) {
-        await markSyncOperationFailed(item.id, itemFailedMessage);
-        if (!firstFailureMessage) {
-          firstFailureMessage = itemFailedMessage;
-        }
-        break;
-      }
-
-      await markSyncOperationDone(item.id);
-      processed += 1;
-      pushedItems.push(item);
-    } catch (error) {
-      const message = getApiError(error);
-      await markSyncOperationFailed(item.id, message);
-      if (!firstFailureMessage) {
-        firstFailureMessage = message;
-      }
-      break;
+      return { index, entry };
     }
-  }
+    return null;
+  };
+
+  const workerCount = Math.max(1, Math.min(SYNC_QUEUE_WORKERS, pendingWithLocks.length));
+  const worker = async () => {
+    while (true) {
+      if (shouldStopScheduling) {
+        return;
+      }
+
+      const claimed = claimNextEntry();
+      if (!claimed) {
+        return;
+      }
+
+      const { index, entry } = claimed;
+      const itemResult = await processPendingQueueItem(entry.item, deviceId);
+      results.push({ queueIndex: entry.queueIndex, result: itemResult });
+      completed.add(index);
+      releaseLocks(entry);
+
+      if (!itemResult.ok && itemResult.failedMessage) {
+        if (entry.queueIndex < firstFailureQueueIndex) {
+          firstFailureQueueIndex = entry.queueIndex;
+          firstFailureMessage = itemResult.failedMessage;
+        }
+        shouldStopScheduling = true;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  const orderedResults = [...results].sort((left, right) => left.queueIndex - right.queueIndex);
+  const pushedItems = orderedResults
+    .filter((entry) => entry.result.ok && entry.result.pushed)
+    .map((entry) => entry.result.item);
+  const processed = pushedItems.length;
+  const requiresRemoteOverwrite = orderedResults.some((entry) => entry.result.requiresRemoteOverwrite);
+  const failedMessage = firstFailureMessage;
 
   return {
     processed,
-    failed: firstFailureMessage !== null,
-    failedMessage: firstFailureMessage,
+    failed: failedMessage !== null,
+    failedMessage,
     pushedItems,
     requiresRemoteOverwrite
   };
@@ -1839,7 +2630,7 @@ async function pullRemoteSnapshot(options?: SyncOptions) {
   const payload = options?.fullPull ? {} : lastSyncAt ? { sinceTs: lastSyncAt } : {};
 
   const { data } = await httpClient.post(buildFastRouteApiUrl('/sync/pull'), payload, {
-    timeout: SYNC_HTTP_TIMEOUT_MS
+    timeout: SYNC_PULL_HTTP_TIMEOUT_MS
   });
 
   if (!isPayloadOk(data)) {
@@ -1882,6 +2673,21 @@ export async function forceLegacyRouteHydration() {
   return routes.length;
 }
 
+async function getPreSyncConnectivityError() {
+  try {
+    await httpClient.get(buildFastRouteApiUrl('/health'), {
+      timeout: SYNC_CONNECTIVITY_PROBE_TIMEOUT_MS
+    });
+    return null;
+  } catch (error) {
+    const message = getApiError(error);
+    if (!isTransientPushFailureMessage(message)) {
+      return null;
+    }
+    return 'Sem conexão com a internet. Verifique a rede e tente novamente.';
+  }
+}
+
 async function runSync(trigger: SyncTrigger, options?: SyncOptions): Promise<SyncResult> {
   if (!getAuthAccessToken()) {
     const pendingOperations = await countPendingSyncOperations();
@@ -1892,6 +2698,19 @@ async function runSync(trigger: SyncTrigger, options?: SyncOptions): Promise<Syn
       processedOperations: 0,
       pendingOperations,
       error: 'Faça login para sincronizar com o backend.'
+    };
+  }
+
+  const connectivityError = await getPreSyncConnectivityError();
+  if (connectivityError) {
+    const pendingOperations = await countPendingSyncOperations();
+    return {
+      ok: false,
+      trigger,
+      pulledRoutes: 0,
+      processedOperations: 0,
+      pendingOperations,
+      error: connectivityError
     };
   }
 

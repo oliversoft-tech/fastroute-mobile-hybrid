@@ -25,6 +25,7 @@ import {
   upsertLocalRoute
 } from '../offline/localDb';
 import { enrichWaypointsWithAddressData } from './supabaseDataApi';
+import { getRouteDetails as getRemoteRouteDetails } from './routesRemoteApi';
 import { ensureE2ESeedData } from '../e2e/seedData';
 
 interface QueryCacheOptions {
@@ -169,6 +170,99 @@ function hasDetailedWaypointTitle(title: unknown) {
   return true;
 }
 
+function toPositiveInteger(value: unknown) {
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function buildWaypointAddressSeqKey(waypoint: Pick<Waypoint, 'address_id' | 'seq_order'>) {
+  const addressId = toPositiveInteger(waypoint.address_id);
+  const seqOrder = toPositiveInteger(waypoint.seq_order);
+  if (!addressId || !seqOrder) {
+    return null;
+  }
+  return `${addressId}:${seqOrder}`;
+}
+
+function mergeDetailedWaypointsFromRemote(
+  localWaypoints: Waypoint[],
+  remoteWaypoints: Waypoint[]
+) {
+  const remoteDetailed = remoteWaypoints.filter((waypoint) => hasDetailedWaypointTitle(waypoint.title));
+  if (remoteDetailed.length === 0) {
+    return { waypoints: localWaypoints, changed: false };
+  }
+
+  const remoteById = new Map<number, Waypoint>();
+  const remoteByAddressSeq = new Map<string, Waypoint>();
+  const remoteByAddressId = new Map<number, Waypoint>();
+  const remoteBySeqOrder = new Map<number, Waypoint>();
+
+  for (const waypoint of remoteDetailed) {
+    remoteById.set(waypoint.id, waypoint);
+    const addressSeqKey = buildWaypointAddressSeqKey(waypoint);
+    if (addressSeqKey && !remoteByAddressSeq.has(addressSeqKey)) {
+      remoteByAddressSeq.set(addressSeqKey, waypoint);
+    }
+
+    const addressId = toPositiveInteger(waypoint.address_id);
+    if (addressId && !remoteByAddressId.has(addressId)) {
+      remoteByAddressId.set(addressId, waypoint);
+    }
+    const seqOrder = toPositiveInteger(waypoint.seq_order);
+    if (seqOrder && !remoteBySeqOrder.has(seqOrder)) {
+      remoteBySeqOrder.set(seqOrder, waypoint);
+    }
+  }
+
+  let changed = false;
+  const merged = localWaypoints.map((waypoint) => {
+    if (hasDetailedWaypointTitle(waypoint.title)) {
+      return waypoint;
+    }
+
+    const byId = remoteById.get(waypoint.id);
+    const addressSeqKey = buildWaypointAddressSeqKey(waypoint);
+    const byAddressSeq = addressSeqKey ? remoteByAddressSeq.get(addressSeqKey) : undefined;
+    const byAddressId = (() => {
+      const addressId = toPositiveInteger(waypoint.address_id);
+      return addressId ? remoteByAddressId.get(addressId) : undefined;
+    })();
+    const bySeqOrder = (() => {
+      const seqOrder = toPositiveInteger(waypoint.seq_order);
+      return seqOrder ? remoteBySeqOrder.get(seqOrder) : undefined;
+    })();
+    const source = byId ?? byAddressSeq ?? byAddressId ?? bySeqOrder;
+    if (!source || !hasDetailedWaypointTitle(source.title)) {
+      return waypoint;
+    }
+
+    const nextWaypoint: Waypoint = {
+      ...waypoint,
+      address_id: toPositiveInteger(waypoint.address_id) ?? toPositiveInteger(source.address_id) ?? waypoint.address_id,
+      title: source.title,
+      subtitle: waypoint.subtitle?.trim() ? waypoint.subtitle : source.subtitle,
+      latitude: typeof waypoint.latitude === 'number' ? waypoint.latitude : source.latitude,
+      longitude: typeof waypoint.longitude === 'number' ? waypoint.longitude : source.longitude
+    };
+
+    changed =
+      changed ||
+      nextWaypoint.address_id !== waypoint.address_id ||
+      nextWaypoint.title !== waypoint.title ||
+      nextWaypoint.subtitle !== waypoint.subtitle ||
+      nextWaypoint.latitude !== waypoint.latitude ||
+      nextWaypoint.longitude !== waypoint.longitude;
+
+    return nextWaypoint;
+  });
+
+  return { waypoints: merged, changed };
+}
+
 function ensureWaypointPhotoDirectory() {
   const documentDirectory = FileSystem.documentDirectory;
   if (!documentDirectory) {
@@ -241,6 +335,7 @@ export async function listRouteWaypoints(routeId: number, _options?: QueryCacheO
       }
 
       return (
+        waypoint.address_id !== original.address_id ||
         waypoint.title !== original.title ||
         waypoint.subtitle !== original.subtitle ||
         waypoint.latitude !== original.latitude ||
@@ -252,10 +347,30 @@ export async function listRouteWaypoints(routeId: number, _options?: QueryCacheO
       await replaceLocalRouteWaypoints(routeId, enriched);
     }
 
-    return enriched;
+    waypoints = enriched;
+    if (!waypoints.some((waypoint) => !hasDetailedWaypointTitle(waypoint.title))) {
+      return waypoints;
+    }
   } catch {
-    return waypoints;
+    // segue para fallback remoto quando enriquecimento por endereço falhar
   }
+
+  try {
+    const remoteDetail = await getRemoteRouteDetails(routeId, { forceRefresh: true });
+    const remoteWaypoints = (remoteDetail.waypoints ?? []).filter((waypoint) => {
+      const normalizedRouteId = Number(waypoint.route_id);
+      return !Number.isFinite(normalizedRouteId) || normalizedRouteId === routeId;
+    });
+    const fallback = mergeDetailedWaypointsFromRemote(waypoints, remoteWaypoints);
+    if (fallback.changed) {
+      await replaceLocalRouteWaypoints(routeId, fallback.waypoints);
+      return fallback.waypoints;
+    }
+  } catch {
+    // mantém resposta local quando fallback remoto estiver indisponível
+  }
+
+  return waypoints;
 }
 
 export async function startRoute(routeId: number) {

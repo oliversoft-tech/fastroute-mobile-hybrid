@@ -190,6 +190,117 @@ function pickString(...values: unknown[]) {
   return undefined;
 }
 
+function hasDetailedWaypointTitle(title: unknown) {
+  if (typeof title !== 'string') {
+    return false;
+  }
+
+  const normalized = title
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+
+  if (!normalized || normalized === 'ENDERECO NAO INFORMADO') {
+    return false;
+  }
+
+  if (/^ENDERECO\s+\d+$/.test(normalized) || /^WAYPOINT\s*#?\s*\d+$/.test(normalized)) {
+    return false;
+  }
+
+  return true;
+}
+
+function toPositiveInteger(value: unknown) {
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function buildWaypointAddressSeqKey(waypoint: Pick<Waypoint, 'address_id' | 'seq_order'>) {
+  const addressId = toPositiveInteger(waypoint.address_id);
+  const seqOrder = toPositiveInteger(waypoint.seq_order);
+  if (!addressId || !seqOrder) {
+    return null;
+  }
+  return `${addressId}:${seqOrder}`;
+}
+
+function mergeDetailedWaypoints(baseWaypoints: Waypoint[], detailedWaypoints: Waypoint[]) {
+  const candidates = detailedWaypoints.filter((waypoint) => hasDetailedWaypointTitle(waypoint.title));
+  if (candidates.length === 0) {
+    return { waypoints: baseWaypoints, changed: false };
+  }
+
+  const byId = new Map<number, Waypoint>();
+  const byAddressSeq = new Map<string, Waypoint>();
+  const byAddressId = new Map<number, Waypoint>();
+  const bySeqOrder = new Map<number, Waypoint>();
+
+  for (const waypoint of candidates) {
+    byId.set(waypoint.id, waypoint);
+    const addressSeqKey = buildWaypointAddressSeqKey(waypoint);
+    if (addressSeqKey && !byAddressSeq.has(addressSeqKey)) {
+      byAddressSeq.set(addressSeqKey, waypoint);
+    }
+    const addressId = toPositiveInteger(waypoint.address_id);
+    if (addressId && !byAddressId.has(addressId)) {
+      byAddressId.set(addressId, waypoint);
+    }
+    const seqOrder = toPositiveInteger(waypoint.seq_order);
+    if (seqOrder && !bySeqOrder.has(seqOrder)) {
+      bySeqOrder.set(seqOrder, waypoint);
+    }
+  }
+
+  let changed = false;
+  const merged = baseWaypoints.map((waypoint) => {
+    if (hasDetailedWaypointTitle(waypoint.title)) {
+      return waypoint;
+    }
+
+    const sourceById = byId.get(waypoint.id);
+    const addressSeqKey = buildWaypointAddressSeqKey(waypoint);
+    const sourceByAddressSeq = addressSeqKey ? byAddressSeq.get(addressSeqKey) : undefined;
+    const sourceByAddressId = (() => {
+      const addressId = toPositiveInteger(waypoint.address_id);
+      return addressId ? byAddressId.get(addressId) : undefined;
+    })();
+    const sourceBySeqOrder = (() => {
+      const seqOrder = toPositiveInteger(waypoint.seq_order);
+      return seqOrder ? bySeqOrder.get(seqOrder) : undefined;
+    })();
+    const source = sourceById ?? sourceByAddressSeq ?? sourceByAddressId ?? sourceBySeqOrder;
+    if (!source || !hasDetailedWaypointTitle(source.title)) {
+      return waypoint;
+    }
+
+    const next: Waypoint = {
+      ...waypoint,
+      address_id: toPositiveInteger(waypoint.address_id) ?? toPositiveInteger(source.address_id) ?? waypoint.address_id,
+      title: source.title,
+      subtitle: waypoint.subtitle?.trim() ? waypoint.subtitle : source.subtitle,
+      latitude: typeof waypoint.latitude === 'number' ? waypoint.latitude : source.latitude,
+      longitude: typeof waypoint.longitude === 'number' ? waypoint.longitude : source.longitude
+    };
+
+    changed =
+      changed ||
+      next.address_id !== waypoint.address_id ||
+      next.title !== waypoint.title ||
+      next.subtitle !== waypoint.subtitle ||
+      next.latitude !== waypoint.latitude ||
+      next.longitude !== waypoint.longitude;
+
+    return next;
+  });
+
+  return { waypoints: merged, changed };
+}
+
 function tryParseJson(value: unknown): unknown {
   if (typeof value !== 'string') {
     return value;
@@ -351,7 +462,16 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
   const resolved = tryParseJson(raw) as ApiObject;
   const address = (resolved.address as ApiObject | undefined) ?? {};
   const addressId = toInteger(
-    resolved.address_id ?? resolved.addressId ?? address.id ?? resolved.id,
+    resolved.address_id ??
+      resolved.addressId ??
+      resolved['address id'] ??
+      resolved['Address ID'] ??
+      address.id ??
+      address.address_id ??
+      address.addressId ??
+      address['address id'] ??
+      address['Address ID'] ??
+      resolved.id,
     index + 1
   );
   const waypointId = toInteger(
@@ -360,21 +480,38 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
   );
   const explicitTitle = pickString(
     resolved.detailed_address,
+    resolved['detailed address'],
+    resolved['Detailed address'],
+    resolved['Detailed Address'],
     resolved.detailedAddress,
     resolved.full_address,
+    resolved['full address'],
+    resolved['Full address'],
+    resolved['Full Address'],
     resolved.fullAddress,
     resolved.formatted_address,
+    resolved['formatted address'],
+    resolved['Formatted address'],
+    resolved['Formatted Address'],
     resolved.formattedAddress,
+    resolved['Receiver to Street'],
+    resolved.receiver_to_street,
     resolved.title,
     resolved.name,
     resolved.address_text,
     resolved.addressLine,
     resolved.address_line,
     address.detailed_address,
+    address['detailed address'],
+    address['Detailed address'],
     address.detailedAddress,
     address.full_address,
+    address['full address'],
+    address['Full address'],
     address.fullAddress,
     address.formatted_address,
+    address['formatted address'],
+    address['Formatted address'],
     address.formattedAddress,
     address.title,
     address.name,
@@ -401,7 +538,18 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
   );
   const city = pickString(resolved.city, resolved.cidade, address.city, address.cidade);
   const state = pickString(resolved.state, resolved.uf, address.state, address.uf);
-  const zip = pickString(resolved.zipcode, resolved.zip_code, resolved.cep, address.zipcode, address.cep);
+  const zip = pickString(
+    resolved.zipcode,
+    resolved.zip_code,
+    resolved['Zip Code'],
+    resolved['zip code'],
+    resolved.cep,
+    address.zipcode,
+    address.zip_code,
+    address['Zip Code'],
+    address['zip code'],
+    address.cep
+  );
   const complement = pickString(resolved.complement, resolved.complemento, address.complement, address.complemento);
   const streetLine = [street, number].filter(Boolean).join(', ').trim();
   const regionParts = [district, city, state].filter(Boolean).join(' - ').trim();
@@ -418,7 +566,13 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
     title: detailedTitle,
     subtitle: pickString(resolved.subtitle, resolved.description, address.subtitle) ?? detailedSubtitle,
     latitude: toNumber(
-      resolved.latitude ?? resolved.lat ?? resolved.geo_lat ?? resolved.latlng_lat ?? address.latitude
+      resolved.latitude ??
+      resolved.lat ??
+      resolved.geo_lat ??
+      resolved.latlng_lat ??
+      resolved['Receiver to Latitude'] ??
+      resolved.receiver_to_latitude ??
+      address.latitude
     ),
     longitude: toNumber(
       resolved.longitude ??
@@ -426,6 +580,8 @@ function normalizeWaypoint(raw: ApiObject, routeIdFallback: number, index: numbe
       resolved.lng ??
       resolved.lon ??
       resolved.geo_lng ??
+      resolved['Receiver to Longitude'] ??
+      resolved.receiver_to_longitude ??
       address.long ??
       address.longitude
     )
@@ -640,6 +796,13 @@ export async function getRouteDetails(routeId: number, options?: QueryCacheOptio
     let resolvedDetail: RouteDetail;
     try {
       const waypointsFromSupabase = await listRouteWaypointsFromSupabase(routeId);
+      const baseWaypoints =
+        waypointsFromSupabase.length > 0
+          ? waypointsFromSupabase
+          : (route?.waypoints ?? []);
+      const mergedWaypoints = route?.waypoints?.length
+        ? mergeDetailedWaypoints(baseWaypoints, route.waypoints).waypoints
+        : baseWaypoints;
       const statusFromMetadata = routeMetadata?.status ? mapRouteStatus(routeMetadata.status) : undefined;
       const createdAtFromMetadata = routeMetadata?.created_at ?? undefined;
       const clusterIdFromMetadata = routeMetadata?.cluster_id ?? undefined;
@@ -649,8 +812,8 @@ export async function getRouteDetails(routeId: number, options?: QueryCacheOptio
           status: statusFromMetadata ?? route.status,
           created_at: createdAtFromMetadata ?? route.created_at,
           cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : route.cluster_id,
-          waypoints_count: waypointsFromSupabase.length,
-          waypoints: waypointsFromSupabase
+          waypoints_count: mergedWaypoints.length,
+          waypoints: mergedWaypoints
         };
       } else {
         resolvedDetail = {
@@ -658,8 +821,8 @@ export async function getRouteDetails(routeId: number, options?: QueryCacheOptio
           cluster_id: Number.isFinite(Number(clusterIdFromMetadata)) ? Number(clusterIdFromMetadata) : 0,
           status: statusFromMetadata ?? ('PENDENTE' as const),
           created_at: createdAtFromMetadata ?? new Date().toISOString(),
-          waypoints_count: waypointsFromSupabase.length,
-          waypoints: waypointsFromSupabase
+          waypoints_count: mergedWaypoints.length,
+          waypoints: mergedWaypoints
         };
       }
     } catch {

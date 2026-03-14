@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View
 } from 'react-native';
 import { StackActions } from '@react-navigation/native';
@@ -85,6 +86,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
   const [showDeliveredConfirmModal, setShowDeliveredConfirmModal] = useState(false);
   const [loadingDeliveryPhoto, setLoadingDeliveryPhoto] = useState(false);
   const [deliveryPhotoUri, setDeliveryPhotoUri] = useState<string | null>(null);
+  const [showPhotoPreviewModal, setShowPhotoPreviewModal] = useState(false);
+  const [photoZoomScale, setPhotoZoomScale] = useState(1);
   const [failureStatus, setFailureStatus] = useState<FailureStatus>('FALHA TEMPO ADVERSO');
   const [failureObs, setFailureObs] = useState('');
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
@@ -123,6 +126,8 @@ export function DeliveryScreen({ route, navigation }: Props) {
     setShowDeliveredConfirmModal(false);
     setLoadingDeliveryPhoto(false);
     setDeliveryPhotoUri(null);
+    setShowPhotoPreviewModal(false);
+    setPhotoZoomScale(1);
     setFailureStatus('FALHA TEMPO ADVERSO');
     setFailureObs('');
     setFeedbackError(null);
@@ -328,7 +333,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
     try {
       setCameraBusy(true);
       const rawPhoto = await cameraRef.current.takePictureAsync({
-        quality: 0.6,
+        quality: 0.45,
         base64: false
       });
 
@@ -339,9 +344,9 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
       const normalizedPhoto = await manipulateAsync(
         rawPhoto.uri,
-        [],
+        [{ resize: { width: 1280 } }],
         {
-          compress: 1,
+          compress: 0.42,
           format: SaveFormat.JPEG,
           base64: false
         }
@@ -461,6 +466,22 @@ export function DeliveryScreen({ route, navigation }: Props) {
     });
   };
 
+  const onOpenPhotoPreview = () => {
+    if (!deliveryPhotoUri) {
+      return;
+    }
+    setPhotoZoomScale(1);
+    setShowPhotoPreviewModal(true);
+  };
+
+  const onZoomInPhotoPreview = () => {
+    setPhotoZoomScale((current) => Math.min(4, Number((current + 0.25).toFixed(2))));
+  };
+
+  const onZoomOutPhotoPreview = () => {
+    setPhotoZoomScale((current) => Math.max(1, Number((current - 0.25).toFixed(2))));
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.card}>
@@ -500,11 +521,18 @@ export function DeliveryScreen({ route, navigation }: Props) {
           </View>
         ) : null}
         {deliveryPhotoUri ? (
-          <Image
-            source={{ uri: deliveryPhotoUri }}
-            resizeMode="cover"
-            style={styles.deliveryPhotoPreview}
-          />
+          <TouchableOpacity
+            style={styles.deliveryPhotoPreviewTouchable}
+            onPress={onOpenPhotoPreview}
+            accessibilityRole="button"
+            accessibilityLabel="Ampliar foto da entrega"
+          >
+            <Image
+              source={{ uri: deliveryPhotoUri }}
+              resizeMode="cover"
+              style={styles.deliveryPhotoPreview}
+            />
+          </TouchableOpacity>
         ) : null}
 
         <PrimaryButton
@@ -629,6 +657,67 @@ export function DeliveryScreen({ route, navigation }: Props) {
                 />
               </>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showPhotoPreviewModal}
+        animationType="fade"
+        onRequestClose={() => setShowPhotoPreviewModal(false)}
+      >
+        <View style={styles.photoPreviewScreen}>
+          <View style={styles.photoPreviewTopBar}>
+            <TouchableOpacity
+              style={styles.photoPreviewTopButton}
+              onPress={() => setShowPhotoPreviewModal(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Fechar foto"
+            >
+              <Text style={styles.photoPreviewTopButtonText}>Fechar</Text>
+            </TouchableOpacity>
+            <Text style={styles.photoPreviewZoomText}>Zoom: {Math.round(photoZoomScale * 100)}%</Text>
+          </View>
+
+          {deliveryPhotoUri ? (
+            <ScrollView
+              style={styles.photoPreviewScroll}
+              contentContainerStyle={styles.photoPreviewContent}
+              minimumZoomScale={1}
+              maximumZoomScale={4}
+              bouncesZoom
+              showsVerticalScrollIndicator={false}
+              showsHorizontalScrollIndicator={false}
+              centerContent
+            >
+              <Image
+                source={{ uri: deliveryPhotoUri }}
+                resizeMode="contain"
+                style={[
+                  styles.photoPreviewImage,
+                  { transform: [{ scale: photoZoomScale }] }
+                ]}
+              />
+            </ScrollView>
+          ) : null}
+
+          <View style={styles.photoPreviewBottomBar}>
+            <TouchableOpacity
+              style={styles.photoPreviewActionButton}
+              onPress={onZoomOutPhotoPreview}
+              accessibilityRole="button"
+              accessibilityLabel="Reduzir zoom"
+            >
+              <Text style={styles.photoPreviewActionText}>-</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.photoPreviewActionButton}
+              onPress={onZoomInPhotoPreview}
+              accessibilityRole="button"
+              accessibilityLabel="Aumentar zoom"
+            >
+              <Text style={styles.photoPreviewActionText}>+</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -787,6 +876,9 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: '#F2F4F7'
   },
+  deliveryPhotoPreviewTouchable: {
+    marginBottom: 8
+  },
   feedbackSuccess: {
     marginBottom: 8,
     color: colors.success,
@@ -844,6 +936,73 @@ const styles = StyleSheet.create({
   },
   cameraActionButton: {
     flex: 1
+  },
+  photoPreviewScreen: {
+    flex: 1,
+    backgroundColor: '#0B111C'
+  },
+  photoPreviewTopBar: {
+    paddingTop: 52,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  photoPreviewTopButton: {
+    borderWidth: 1,
+    borderColor: '#3C4A63',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#111C2F'
+  },
+  photoPreviewTopButtonText: {
+    color: '#DDE6F8',
+    fontWeight: '700'
+  },
+  photoPreviewZoomText: {
+    color: '#DDE6F8',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  photoPreviewScroll: {
+    flex: 1
+  },
+  photoPreviewContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 12
+  },
+  photoPreviewImage: {
+    width: '100%',
+    height: '100%'
+  },
+  photoPreviewBottomBar: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+    paddingTop: 12
+  },
+  photoPreviewActionButton: {
+    width: 56,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#3C4A63',
+    backgroundColor: '#111C2F',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  photoPreviewActionText: {
+    color: '#DDE6F8',
+    fontSize: 22,
+    fontWeight: '800',
+    lineHeight: 24
   },
   modalOverlay: {
     flex: 1,

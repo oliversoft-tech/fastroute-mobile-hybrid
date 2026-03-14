@@ -2,19 +2,23 @@ import {
   canFinishRoute
 } from '@oliverbill/fastroute-domain';
 import * as FileSystem from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { RouteDetail, Waypoint, WaypointStatus } from './types';
 import {
   applyLocalWaypointReorder,
   backfillLocalWaypointTitlesByAddress,
   deleteLocalRoute,
   enqueueSyncOperation,
+  getLastImportedRouteIds as getStoredLastImportedRouteIds,
   getLocalDb,
   getLocalRoute,
   getLocalWaypointPhotoUri,
   getLocalWaypoint,
   listLocalRoutes,
   listLocalWaypoints,
+  removeLastImportedRouteId,
   replaceLocalRouteWaypoints,
+  setLastImportedRouteIds as setStoredLastImportedRouteIds,
   updatePendingImportRouteIds,
   upsertLocalWaypointPhotoUri,
   updateLocalRouteStatus,
@@ -22,6 +26,7 @@ import {
   upsertLocalRoute
 } from '../offline/localDb';
 import { enrichWaypointsWithAddressData } from './supabaseDataApi';
+import { getRouteDetails as getRemoteRouteDetails, getWaypointPhoto as getRemoteWaypointPhoto } from './routesRemoteApi';
 import { ensureE2ESeedData } from '../e2e/seedData';
 
 interface QueryCacheOptions {
@@ -140,6 +145,128 @@ function isWaypointDeliveredStatus(status: string | WaypointStatus | undefined) 
   return normalized.includes('ENTREGUE') || normalized.includes('CONCLUID');
 }
 
+function getPhotoExtensionFromMimeType(mimeType?: string) {
+  const normalized = String(mimeType ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (normalized.includes('png')) {
+    return 'png';
+  }
+  if (normalized.includes('webp')) {
+    return 'webp';
+  }
+  return 'jpg';
+}
+
+function sanitizeFileName(fileName: string, fallbackName: string) {
+  const trimmed = fileName.trim();
+  if (!trimmed) {
+    return fallbackName;
+  }
+  const sanitized = trimmed.replace(/[^\w.\-]+/g, '_');
+  return sanitized.length > 0 ? sanitized : fallbackName;
+}
+
+const SYNC_PHOTO_TARGET_MAX_BYTES = 320 * 1024;
+const SYNC_PHOTO_MAX_BASE64_CHARS = 520 * 1024;
+const SYNC_PHOTO_REENCODE_PROFILES = [
+  { width: 1280, compress: 0.42 },
+  { width: 1080, compress: 0.35 },
+  { width: 960, compress: 0.3 },
+  { width: 800, compress: 0.24 },
+  { width: 640, compress: 0.2 }
+];
+
+async function readLocalFileSizeBytes(fileUri: string) {
+  const info = await FileSystem.getInfoAsync(fileUri, { size: true });
+  if (info.exists && typeof info.size === 'number' && Number.isFinite(info.size) && info.size >= 0) {
+    return Math.trunc(info.size);
+  }
+  return null;
+}
+
+async function buildPhotoSyncPayload(imageUri: string) {
+  let workingUri = imageUri;
+  let workingSize = await readLocalFileSizeBytes(workingUri);
+
+  for (const profile of SYNC_PHOTO_REENCODE_PROFILES) {
+    if (typeof workingSize === 'number' && workingSize <= SYNC_PHOTO_TARGET_MAX_BYTES) {
+      break;
+    }
+
+    const manipulated = await manipulateAsync(
+      workingUri,
+      [{ resize: { width: profile.width } }],
+      {
+        compress: profile.compress,
+        format: SaveFormat.JPEG,
+        base64: false
+      }
+    );
+    workingUri = manipulated.uri;
+    workingSize = await readLocalFileSizeBytes(workingUri);
+  }
+
+  const imageBase64 = await FileSystem.readAsStringAsync(workingUri, {
+    encoding: FileSystem.EncodingType.Base64
+  });
+  if (!imageBase64 || imageBase64.trim().length === 0) {
+    throw new Error('Não foi possível preparar a foto para sincronização.');
+  }
+
+  if (imageBase64.length > SYNC_PHOTO_MAX_BASE64_CHARS) {
+    throw new Error(
+      'A foto ficou muito grande para sincronizar. Tire outra foto mais próxima ou com menos detalhes.'
+    );
+  }
+
+  const recomputedSize = await readLocalFileSizeBytes(workingUri);
+  return {
+    base64: imageBase64,
+    fileSizeBytes:
+      typeof recomputedSize === 'number'
+        ? recomputedSize
+        : Math.max(1, Math.trunc((imageBase64.length * 3) / 4))
+  };
+}
+
+async function persistRemoteWaypointPhotoLocally(
+  waypointId: number,
+  payload: Awaited<ReturnType<typeof getRemoteWaypointPhoto>>
+) {
+  if (!payload) {
+    return null;
+  }
+
+  const baseDirectory = FileSystem.documentDirectory;
+  if (!baseDirectory) {
+    return payload.kind === 'url' ? payload.url : null;
+  }
+
+  const photosDirectory = `${baseDirectory}delivery-photos`;
+  await FileSystem.makeDirectoryAsync(photosDirectory, { intermediates: true });
+
+  const extension = getPhotoExtensionFromMimeType(payload.kind === 'base64' ? payload.mimeType : payload.mimeType);
+  const fallbackFileName = `waypoint_${waypointId}_${Date.now()}.${extension}`;
+  const normalizedFileName = sanitizeFileName(payload.fileName, fallbackFileName);
+  const destinationUri = `${photosDirectory}/${normalizedFileName}`;
+
+  if (payload.kind === 'base64') {
+    await FileSystem.writeAsStringAsync(destinationUri, payload.base64, {
+      encoding: FileSystem.EncodingType.Base64
+    });
+    return destinationUri;
+  }
+
+  try {
+    await FileSystem.downloadAsync(payload.url, destinationUri);
+    return destinationUri;
+  } catch {
+    return payload.url;
+  }
+}
+
 function hasDetailedWaypointTitle(title: unknown) {
   if (typeof title !== 'string') {
     return false;
@@ -164,6 +291,99 @@ function hasDetailedWaypointTitle(title: unknown) {
   }
 
   return true;
+}
+
+function toPositiveInteger(value: unknown) {
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function buildWaypointAddressSeqKey(waypoint: Pick<Waypoint, 'address_id' | 'seq_order'>) {
+  const addressId = toPositiveInteger(waypoint.address_id);
+  const seqOrder = toPositiveInteger(waypoint.seq_order);
+  if (!addressId || !seqOrder) {
+    return null;
+  }
+  return `${addressId}:${seqOrder}`;
+}
+
+function mergeDetailedWaypointsFromRemote(
+  localWaypoints: Waypoint[],
+  remoteWaypoints: Waypoint[]
+) {
+  const remoteDetailed = remoteWaypoints.filter((waypoint) => hasDetailedWaypointTitle(waypoint.title));
+  if (remoteDetailed.length === 0) {
+    return { waypoints: localWaypoints, changed: false };
+  }
+
+  const remoteById = new Map<number, Waypoint>();
+  const remoteByAddressSeq = new Map<string, Waypoint>();
+  const remoteByAddressId = new Map<number, Waypoint>();
+  const remoteBySeqOrder = new Map<number, Waypoint>();
+
+  for (const waypoint of remoteDetailed) {
+    remoteById.set(waypoint.id, waypoint);
+    const addressSeqKey = buildWaypointAddressSeqKey(waypoint);
+    if (addressSeqKey && !remoteByAddressSeq.has(addressSeqKey)) {
+      remoteByAddressSeq.set(addressSeqKey, waypoint);
+    }
+
+    const addressId = toPositiveInteger(waypoint.address_id);
+    if (addressId && !remoteByAddressId.has(addressId)) {
+      remoteByAddressId.set(addressId, waypoint);
+    }
+    const seqOrder = toPositiveInteger(waypoint.seq_order);
+    if (seqOrder && !remoteBySeqOrder.has(seqOrder)) {
+      remoteBySeqOrder.set(seqOrder, waypoint);
+    }
+  }
+
+  let changed = false;
+  const merged = localWaypoints.map((waypoint) => {
+    if (hasDetailedWaypointTitle(waypoint.title)) {
+      return waypoint;
+    }
+
+    const byId = remoteById.get(waypoint.id);
+    const addressSeqKey = buildWaypointAddressSeqKey(waypoint);
+    const byAddressSeq = addressSeqKey ? remoteByAddressSeq.get(addressSeqKey) : undefined;
+    const byAddressId = (() => {
+      const addressId = toPositiveInteger(waypoint.address_id);
+      return addressId ? remoteByAddressId.get(addressId) : undefined;
+    })();
+    const bySeqOrder = (() => {
+      const seqOrder = toPositiveInteger(waypoint.seq_order);
+      return seqOrder ? remoteBySeqOrder.get(seqOrder) : undefined;
+    })();
+    const source = byId ?? byAddressSeq ?? byAddressId ?? bySeqOrder;
+    if (!source || !hasDetailedWaypointTitle(source.title)) {
+      return waypoint;
+    }
+
+    const nextWaypoint: Waypoint = {
+      ...waypoint,
+      address_id: toPositiveInteger(waypoint.address_id) ?? toPositiveInteger(source.address_id) ?? waypoint.address_id,
+      title: source.title,
+      subtitle: waypoint.subtitle?.trim() ? waypoint.subtitle : source.subtitle,
+      latitude: typeof waypoint.latitude === 'number' ? waypoint.latitude : source.latitude,
+      longitude: typeof waypoint.longitude === 'number' ? waypoint.longitude : source.longitude
+    };
+
+    changed =
+      changed ||
+      nextWaypoint.address_id !== waypoint.address_id ||
+      nextWaypoint.title !== waypoint.title ||
+      nextWaypoint.subtitle !== waypoint.subtitle ||
+      nextWaypoint.latitude !== waypoint.latitude ||
+      nextWaypoint.longitude !== waypoint.longitude;
+
+    return nextWaypoint;
+  });
+
+  return { waypoints: merged, changed };
 }
 
 function ensureWaypointPhotoDirectory() {
@@ -238,6 +458,7 @@ export async function listRouteWaypoints(routeId: number, _options?: QueryCacheO
       }
 
       return (
+        waypoint.address_id !== original.address_id ||
         waypoint.title !== original.title ||
         waypoint.subtitle !== original.subtitle ||
         waypoint.latitude !== original.latitude ||
@@ -249,10 +470,30 @@ export async function listRouteWaypoints(routeId: number, _options?: QueryCacheO
       await replaceLocalRouteWaypoints(routeId, enriched);
     }
 
-    return enriched;
+    waypoints = enriched;
+    if (!waypoints.some((waypoint) => !hasDetailedWaypointTitle(waypoint.title))) {
+      return waypoints;
+    }
   } catch {
-    return waypoints;
+    // segue para fallback remoto quando enriquecimento por endereço falhar
   }
+
+  try {
+    const remoteDetail = await getRemoteRouteDetails(routeId, { forceRefresh: true });
+    const remoteWaypoints = (remoteDetail.waypoints ?? []).filter((waypoint) => {
+      const normalizedRouteId = Number(waypoint.route_id);
+      return !Number.isFinite(normalizedRouteId) || normalizedRouteId === routeId;
+    });
+    const fallback = mergeDetailedWaypointsFromRemote(waypoints, remoteWaypoints);
+    if (fallback.changed) {
+      await replaceLocalRouteWaypoints(routeId, fallback.waypoints);
+      return fallback.waypoints;
+    }
+  } catch {
+    // mantém resposta local quando fallback remoto estiver indisponível
+  }
+
+  return waypoints;
 }
 
 export async function startRoute(routeId: number) {
@@ -306,6 +547,18 @@ export async function updateWaypointStatus(
   const targetStatus = mapTargetStatusToDomain(status);
 
   const normalizedFileName = options?.file_name?.trim() || `entrega_${waypointId}.jpg`;
+  const queueOptions: Record<string, unknown> = {
+    ...(options ?? {}),
+    file_name: normalizedFileName
+  };
+
+  if (options?.image_uri) {
+    const imageUri = options.image_uri;
+    const preparedPhoto = await buildPhotoSyncPayload(imageUri);
+    queueOptions.image_base64 = preparedPhoto.base64;
+    queueOptions.image_mime_type = 'image/jpeg';
+    queueOptions.file_size_bytes = preparedPhoto.fileSizeBytes;
+  }
 
   const localStatus = mapDomainStatusToLocal(targetStatus);
   await updateLocalWaypointStatus(waypointId, localStatus);
@@ -317,10 +570,7 @@ export async function updateWaypointStatus(
     routeId,
     waypointId,
     status: targetStatus,
-    options: {
-      ...options,
-      file_name: normalizedFileName
-    }
+    options: queueOptions
   });
 }
 
@@ -366,6 +616,62 @@ export async function updateWaypointOrder(params: {
   });
 }
 
+function enforceMinimumWaypointsPerRouteGroup(
+  groups: number[][],
+  minimumWaypointsPerRoute: number
+) {
+  const normalizedGroups = groups
+    .map((group) =>
+      [...new Set(
+        group
+          .map((value) => Math.trunc(Number(value)))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      )]
+    )
+    .filter((group) => group.length > 0);
+
+  if (normalizedGroups.length <= 1 || minimumWaypointsPerRoute <= 1) {
+    return normalizedGroups;
+  }
+
+  let guard = 0;
+  while (guard < 1000) {
+    guard += 1;
+
+    const smallGroupIndex = normalizedGroups.findIndex(
+      (group) => group.length > 0 && group.length < minimumWaypointsPerRoute
+    );
+    if (smallGroupIndex < 0 || normalizedGroups.length <= 1) {
+      break;
+    }
+
+    let targetGroupIndex = -1;
+    let maxSize = -1;
+    for (let index = 0; index < normalizedGroups.length; index += 1) {
+      if (index === smallGroupIndex) {
+        continue;
+      }
+      const size = normalizedGroups[index].length;
+      if (size > maxSize) {
+        maxSize = size;
+        targetGroupIndex = index;
+      }
+    }
+
+    if (targetGroupIndex < 0) {
+      targetGroupIndex = smallGroupIndex === 0 ? 1 : 0;
+    }
+
+    normalizedGroups[targetGroupIndex] = [
+      ...normalizedGroups[targetGroupIndex],
+      ...normalizedGroups[smallGroupIndex]
+    ];
+    normalizedGroups.splice(smallGroupIndex, 1);
+  }
+
+  return normalizedGroups;
+}
+
 export async function confirmImportedRoutesGrouping(params: {
   importRouteIds: number[];
   groupedWaypointIds: number[][];
@@ -403,7 +709,7 @@ export async function confirmImportedRoutesGrouping(params: {
   }
 
   const assignedWaypointIds = new Set<number>();
-  const normalizedGroups = groups.map((group) =>
+  let normalizedGroups = groups.map((group) =>
     group.filter((waypointId) => {
       if (!sourceWaypointById.has(waypointId) || assignedWaypointIds.has(waypointId)) {
         return false;
@@ -421,6 +727,8 @@ export async function confirmImportedRoutesGrouping(params: {
       normalizedGroups[0] = [...normalizedGroups[0], ...missingWaypointIds];
     }
   }
+
+  normalizedGroups = enforceMinimumWaypointsPerRouteGroup(normalizedGroups, 2);
 
   const currentRoutes = await listLocalRoutes();
   const currentRouteById = new Map(currentRoutes.map((entry) => [entry.id, entry]));
@@ -497,6 +805,7 @@ export async function confirmImportedRoutesGrouping(params: {
   });
 
   await updatePendingImportRouteIds(importRouteIds, finalRouteIds);
+  await setStoredLastImportedRouteIds(finalRouteIds);
   return finalRouteIds;
 }
 
@@ -512,11 +821,33 @@ export async function getWaypointDeliveryPhoto(
   if (!isWaypointDeliveredStatus(currentStatus)) {
     return null;
   }
-  return null;
+
+  const remotePhoto = await getRemoteWaypointPhoto(waypointId);
+  if (!remotePhoto) {
+    return null;
+  }
+
+  const persistedUri = await persistRemoteWaypointPhotoLocally(waypointId, remotePhoto);
+  if (!persistedUri) {
+    return null;
+  }
+
+  await upsertLocalWaypointPhotoUri(waypointId, persistedUri);
+  return persistedUri;
 }
 
-export async function deleteRoute(routeId: number): Promise<DeleteRouteResult> {
+export async function getLastImportedRouteIds() {
+  return getStoredLastImportedRouteIds();
+}
+
+export async function deleteRoute(routeId: number, cancelReason?: string): Promise<DeleteRouteResult> {
+  const normalizedCancelReason = cancelReason?.trim() || undefined;
   await deleteLocalRoute(routeId);
-  await enqueueSyncOperation('DELETE_ROUTE', { routeId });
+  await removeLastImportedRouteId(routeId);
+  await enqueueSyncOperation('DELETE_ROUTE', {
+    routeId,
+    cancel_reason: normalizedCancelReason,
+    justificativa_cancel: normalizedCancelReason
+  });
   return { queuedForSync: true };
 }

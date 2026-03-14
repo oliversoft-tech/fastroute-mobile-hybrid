@@ -21,6 +21,7 @@ import { resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from '../utils/authStorage';
 import { invalidateRouteQueryCache } from '../state/routesQueryCache';
 import { forceLegacyRouteHydration, maybeRunInitialAutoSync, syncNow } from '../offline/syncEngine';
+import { setCurrentDriverId } from '../offline/localDb';
 import { forceE2ESeedData } from '../e2e/seedData';
 
 const runtimeProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } })
@@ -121,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthTokenState(session.token);
         setRefreshTokenState(session.refreshToken ?? null);
         setAuthSessionTokens(session.token, session.refreshToken ?? null);
+        await setCurrentDriverId(Number.isFinite(Number(resolvedUserId)) ? Number(resolvedUserId) : null);
 
         if (resolvedUserId !== session.userId) {
           await saveAuthSession({
@@ -182,6 +184,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthTokenState(tokens.accessToken);
     setRefreshTokenState(tokens.refreshToken);
     setAuthSessionTokens(tokens.accessToken, tokens.refreshToken);
+    await setCurrentDriverId(Number.isFinite(Number(resolvedUserId)) ? Number(resolvedUserId) : null);
     try {
       await saveAuthSession({
         email,
@@ -205,6 +208,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await clearAuthSession();
+    await setCurrentDriverId(null);
     setUserEmail(null);
     setUserId(null);
     setAuthTokenState(null);

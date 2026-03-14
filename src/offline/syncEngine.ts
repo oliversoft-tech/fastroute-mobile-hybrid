@@ -2,6 +2,8 @@ import { RouteDetail, RouteStatus, Waypoint, WaypointStatus } from '../api/types
 import { getApiError, getAuthAccessToken, httpClient } from '../api/httpClient';
 import { buildFastRouteApiUrl } from '../config/api';
 import { enrichWaypointsWithAddressData, resolveDriverUserIdFromAuthId } from '../api/supabaseDataApi';
+import * as FileSystem from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import {
   applyLocalWaypointReorder,
   backfillPendingImportDriverId,
@@ -32,6 +34,10 @@ import {
   updateLocalWaypointStatus
 } from './localDb';
 import { loadAuthSession } from '../utils/authStorage';
+import {
+  buildWaypointStatusUpdateMutationPayload,
+  hasWaypointPhotoMetadataInQueuePayload
+} from './waypointSyncPayload';
 
 type SyncTrigger = 'manual' | 'scheduled';
 
@@ -76,6 +82,11 @@ interface PendingQueueItemWithLocks {
   queueIndex: number;
 }
 
+interface CoalescedPendingQueue {
+  items: SyncQueueItem[];
+  droppedQueueIds: number[];
+}
+
 type SyncMutationEntityType = 'route' | 'route_waypoint';
 
 interface SyncMutation {
@@ -115,6 +126,7 @@ const SYNC_PULL_HTTP_TIMEOUT_MS = 45000;
 const SYNC_PUSH_HTTP_TIMEOUT_MS = 25000;
 const SYNC_CONNECTIVITY_PROBE_TIMEOUT_MS = 3000;
 const SYNC_PUSH_BATCH_SIZE = 30;
+const SYNC_PUSH_BATCH_MAX_BYTES = 700 * 1024;
 const SYNC_QUEUE_WORKERS = 3;
 const MAX_TRANSIENT_PUSH_ATTEMPTS = 3;
 const TRANSIENT_PUSH_RETRY_BASE_DELAYS_MS = [700, 1400];
@@ -137,6 +149,15 @@ const WAYPOINT_STATUS_RANK: Record<WaypointStatus, number> = {
 const SYNC_DEVICE_ID_KEY = 'sync_device_id';
 const ROUTE_VERSION_KEY_PREFIX = 'sync_version_route_';
 const WAYPOINT_VERSION_KEY_PREFIX = 'sync_version_waypoint_';
+const SYNC_PHOTO_TARGET_MAX_BYTES = 320 * 1024;
+const SYNC_PHOTO_MAX_BASE64_CHARS = 520 * 1024;
+const SYNC_PHOTO_REENCODE_PROFILES = [
+  { width: 1280, compress: 0.42 },
+  { width: 1080, compress: 0.35 },
+  { width: 960, compress: 0.3 },
+  { width: 800, compress: 0.24 },
+  { width: 640, compress: 0.2 }
+];
 
 function normalizeText(value: unknown) {
   return String(value ?? '')
@@ -314,6 +335,192 @@ function pickString(...values: unknown[]) {
     }
   }
   return undefined;
+}
+
+async function readLocalFileSizeBytes(fileUri: string) {
+  try {
+    const info = await FileSystem.getInfoAsync(fileUri, { size: true });
+    if (info.exists && typeof info.size === 'number' && Number.isFinite(info.size) && info.size >= 0) {
+      return Math.trunc(info.size);
+    }
+  } catch {
+    // Ignora falhas de leitura para manter fluxo de sync resiliente.
+  }
+  return null;
+}
+
+function ensureFileUri(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.startsWith('file://')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/')) {
+    return `file://${trimmed}`;
+  }
+  return trimmed;
+}
+
+function extractDocumentsRelativePath(imageUri: string) {
+  const normalized = imageUri.replace(/^file:\/\//i, '');
+  const marker = '/Documents/';
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+  const relative = normalized.slice(markerIndex + marker.length).replace(/^\/+/, '');
+  return relative.length > 0 ? relative : null;
+}
+
+async function resolveReadablePhotoUri(imageUri: string) {
+  const normalizedInput = String(imageUri ?? '').trim();
+  if (!normalizedInput) {
+    return null;
+  }
+
+  const candidateUris: string[] = [];
+  const appendCandidate = (candidate: string | null | undefined) => {
+    const normalizedCandidate = String(candidate ?? '').trim();
+    if (!normalizedCandidate) {
+      return;
+    }
+    if (!candidateUris.includes(normalizedCandidate)) {
+      candidateUris.push(normalizedCandidate);
+    }
+  };
+
+  appendCandidate(normalizedInput);
+  appendCandidate(ensureFileUri(normalizedInput));
+
+  const relativeFromDocuments = extractDocumentsRelativePath(normalizedInput);
+  if (relativeFromDocuments && FileSystem.documentDirectory) {
+    appendCandidate(`${FileSystem.documentDirectory}${relativeFromDocuments}`);
+  }
+
+  for (const candidate of candidateUris) {
+    try {
+      const info = await FileSystem.getInfoAsync(candidate, { size: true });
+      if (info.exists) {
+        return candidate;
+      }
+    } catch {
+      // ignora candidato inválido e testa próximo
+    }
+  }
+
+  return null;
+}
+
+async function buildReducedPhotoBase64ForSync(imageUri: string) {
+  const readableUri = await resolveReadablePhotoUri(imageUri);
+  if (!readableUri) {
+    throw new Error(
+      'Foto pendente não encontrada no dispositivo. Tire a foto novamente neste waypoint para concluir o sync.'
+    );
+  }
+
+  let workingUri = readableUri;
+  let workingSize = await readLocalFileSizeBytes(workingUri);
+
+  for (const profile of SYNC_PHOTO_REENCODE_PROFILES) {
+    if (typeof workingSize === 'number' && workingSize <= SYNC_PHOTO_TARGET_MAX_BYTES) {
+      break;
+    }
+
+    try {
+      const manipulated = await manipulateAsync(
+        workingUri,
+        [{ resize: { width: profile.width } }],
+        {
+          compress: profile.compress,
+          format: SaveFormat.JPEG,
+          base64: false
+        }
+      );
+      workingUri = manipulated.uri;
+      workingSize = await readLocalFileSizeBytes(workingUri);
+    } catch {
+      break;
+    }
+  }
+
+  const base64 = await FileSystem.readAsStringAsync(workingUri, {
+    encoding: FileSystem.EncodingType.Base64
+  });
+  if (!base64 || base64.trim().length === 0) {
+    throw new Error('Não foi possível preparar a foto para sincronização.');
+  }
+
+  if (base64.length > SYNC_PHOTO_MAX_BASE64_CHARS) {
+    throw new Error(
+      'Foto muito grande para sincronizar (413). Tire outra foto e tente novamente.'
+    );
+  }
+
+  const recomputedSize = await readLocalFileSizeBytes(workingUri);
+  return {
+    base64,
+    fileSizeBytes:
+      typeof recomputedSize === 'number'
+        ? recomputedSize
+        : Math.max(1, Math.trunc((base64.length * 3) / 4))
+  };
+}
+
+async function optimizeWaypointStatusQueuePayloadForSync(payload: Record<string, unknown>) {
+  const options = asRecord(payload.options);
+  const imageUri = pickString(
+    options?.image_uri,
+    options?.imageUri,
+    payload.image_uri,
+    payload.imageUri
+  );
+
+  const queuedBase64 = pickString(
+    options?.image_base64,
+    options?.imageBase64,
+    payload.image_base64,
+    payload.imageBase64
+  );
+  const queuedFileSize =
+    toOptionalPositiveInt(
+      options?.file_size_bytes ??
+      options?.fileSizeBytes ??
+      payload.file_size_bytes ??
+      payload.fileSizeBytes
+    ) ?? null;
+  const alreadyWithinSafeLimit =
+    Boolean(queuedBase64) &&
+    (queuedBase64?.length ?? 0) <= SYNC_PHOTO_MAX_BASE64_CHARS &&
+    (queuedFileSize === null || queuedFileSize <= SYNC_PHOTO_TARGET_MAX_BYTES);
+
+  if (alreadyWithinSafeLimit) {
+    return payload;
+  }
+
+  if (!imageUri) {
+    if (Boolean(queuedBase64) && (queuedBase64?.length ?? 0) > SYNC_PHOTO_MAX_BASE64_CHARS) {
+      throw new Error(
+        'Foto pendente muito grande para sincronizar (413). Tire a foto novamente neste waypoint.'
+      );
+    }
+    return payload;
+  }
+
+  const reduced = await buildReducedPhotoBase64ForSync(imageUri);
+  const nextOptions: Record<string, unknown> = {
+    ...(options ?? {}),
+    image_base64: reduced.base64,
+    image_mime_type: 'image/jpeg',
+    file_size_bytes: reduced.fileSizeBytes
+  };
+
+  return {
+    ...payload,
+    options: nextOptions
+  };
 }
 
 function decodeBase64UrlToUtf8(value: string) {
@@ -1198,15 +1405,70 @@ function waitForMs(ms: number) {
   });
 }
 
-function splitIntoChunks<T>(items: T[], chunkSize: number) {
-  const size = Math.max(1, Math.trunc(Number(chunkSize)));
-  const chunks: T[][] = [];
+function estimateUtf8Bytes(value: string) {
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(value).length;
+  }
+  // Fallback conservador quando TextEncoder não estiver disponível.
+  return value.length * 2;
+}
 
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
+function estimatePushMutationBodyBytes(mutation: SyncMutation) {
+  const body = {
+    deviceId: mutation.deviceId,
+    mutationId: mutation.mutationId,
+    entityType: mutation.entityType,
+    entityId: mutation.entityId,
+    op: mutation.op,
+    baseVersion: mutation.baseVersion,
+    payload: mutation.payload
+  };
+
+  try {
+    return estimateUtf8Bytes(JSON.stringify(body));
+  } catch {
+    return 0;
+  }
+}
+
+function splitMutationsIntoSizedBatches(
+  mutations: SyncMutation[],
+  maxItemsPerBatch: number,
+  maxBytesPerBatch: number
+) {
+  const maxItems = Math.max(1, Math.trunc(Number(maxItemsPerBatch)));
+  const maxBytes = Math.max(1, Math.trunc(Number(maxBytesPerBatch)));
+  const batches: SyncMutation[][] = [];
+  let currentBatch: SyncMutation[] = [];
+  let currentBatchBytes = 0;
+
+  for (const mutation of mutations) {
+    const mutationBytes = estimatePushMutationBodyBytes(mutation) + 8;
+    if (mutationBytes > maxBytes) {
+      throw new Error(
+        `Mutação ${mutation.mutationId} excede o limite de payload do sync.`
+      );
+    }
+
+    const shouldSplit =
+      currentBatch.length > 0 &&
+      (currentBatch.length >= maxItems || currentBatchBytes + mutationBytes > maxBytes);
+
+    if (shouldSplit) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBatchBytes = 0;
+    }
+
+    currentBatch.push(mutation);
+    currentBatchBytes += mutationBytes;
   }
 
-  return chunks;
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
 }
 
 function normalizePushStatus(value: unknown) {
@@ -1215,6 +1477,14 @@ function normalizePushStatus(value: unknown) {
     return 'UNKNOWN';
   }
   return normalized;
+}
+
+function normalizeSyncFailureMessageForUi(message: string) {
+  if (/413\s+Request\s+Entity\s+Too\s+Large/i.test(message) || /REQUEST ENTITY TOO LARGE/i.test(message)) {
+    return 'Falha no sync: payload muito grande para o servidor (413). Tire a foto novamente com menor tamanho e tente sincronizar.';
+  }
+
+  return message;
 }
 
 function routeVersionKey(routeId: number) {
@@ -1379,13 +1649,16 @@ async function buildMutationsForQueueItem(
       if (!localWaypoint) {
         return mutations;
       }
+      const optimizedPayload = await optimizeWaypointStatusQueuePayloadForSync(payload);
       await pushWaypointMutation(
         waypointId,
         'UPDATE',
-        {
-          route_id: localWaypoint.route_id,
-          status: mapQueuedWaypointStatusToServer(payload.status)
-        }
+        buildWaypointStatusUpdateMutationPayload({
+          queuePayload: optimizedPayload,
+          routeId: localWaypoint.route_id,
+          waypointId,
+          status: mapQueuedWaypointStatusToServer(optimizedPayload.status ?? payload.status)
+        })
       );
       return mutations;
     }
@@ -1973,7 +2246,7 @@ async function pushSingleMutation(mutation: SyncMutation): Promise<PushSingleMut
         );
         data = response.data;
       } catch (error) {
-        const failureMessage = getApiError(error);
+        const failureMessage = normalizeSyncFailureMessageForUi(getApiError(error));
         if (isDuplicateCreateAlreadyApplied(failureMessage, mutation)) {
           return { ok: true, recoveredDuplicateCreate: true };
         }
@@ -1988,7 +2261,9 @@ async function pushSingleMutation(mutation: SyncMutation): Promise<PushSingleMut
       }
 
       if (!isPayloadOk(data)) {
-        const failureMessage = readErrorMessage(data, 'Falha ao sincronizar mutação pendente.');
+        const failureMessage = normalizeSyncFailureMessageForUi(
+          readErrorMessage(data, 'Falha ao sincronizar mutação pendente.')
+        );
         if (isDuplicateCreateAlreadyApplied(failureMessage, mutation)) {
           return { ok: true, recoveredDuplicateCreate: true };
         }
@@ -2127,7 +2402,7 @@ async function pushMutationBatch(mutations: SyncMutation[]): Promise<PushMutatio
         );
         data = response.data;
       } catch (error) {
-        const failureMessage = getApiError(error);
+        const failureMessage = normalizeSyncFailureMessageForUi(getApiError(error));
         if (
           isTransientPushFailureMessage(failureMessage) &&
           transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS - 1
@@ -2142,7 +2417,9 @@ async function pushMutationBatch(mutations: SyncMutation[]): Promise<PushMutatio
       }
 
       if (!isPayloadOk(data)) {
-        const failureMessage = readErrorMessage(data, 'Falha ao sincronizar mutações pendentes.');
+        const failureMessage = normalizeSyncFailureMessageForUi(
+          readErrorMessage(data, 'Falha ao sincronizar mutações pendentes.')
+        );
         if (
           isTransientPushFailureMessage(failureMessage) &&
           transientAttempt < MAX_TRANSIENT_PUSH_ATTEMPTS - 1
@@ -2246,7 +2523,11 @@ async function pushMutationsInBatches(mutations: SyncMutation[]): Promise<PushMu
   }
 
   let recoveredDuplicateCreate = false;
-  const chunks = splitIntoChunks(mutations, SYNC_PUSH_BATCH_SIZE);
+  const chunks = splitMutationsIntoSizedBatches(
+    mutations,
+    SYNC_PUSH_BATCH_SIZE,
+    SYNC_PUSH_BATCH_MAX_BYTES
+  );
   for (const chunk of chunks) {
     const chunkResult = await pushMutationBatch(chunk);
     if (!chunkResult.ok) {
@@ -2270,6 +2551,168 @@ function normalizeLockKeys(lockKeys: string[]) {
       .map((key) => key.trim())
       .filter((key) => key.length > 0)
   )].sort();
+}
+
+function buildImportRouteSignature(routeIds: number[], payload: Record<string, unknown>) {
+  const importId = toOptionalPositiveInt(payload.import_id ?? payload.importId) ?? 0;
+  return `${importId}|${routeIds.join(',')}`;
+}
+
+async function resolveRouteIdForWaypointMutation(
+  item: SyncQueueItem,
+  waypointRouteCache: Map<number, number | null>
+) {
+  const payload = item.payload ?? {};
+  const payloadRouteId = toQueueRouteId(payload);
+  if (payloadRouteId) {
+    return payloadRouteId;
+  }
+
+  const waypointId = toQueueWaypointId(payload);
+  if (!waypointId) {
+    return null;
+  }
+
+  if (waypointRouteCache.has(waypointId)) {
+    return waypointRouteCache.get(waypointId) ?? null;
+  }
+
+  const localWaypoint = await getLocalWaypoint(waypointId);
+  const localRouteId = toOptionalPositiveInt(localWaypoint?.route_id);
+  waypointRouteCache.set(waypointId, localRouteId);
+  return localRouteId ?? null;
+}
+
+async function coalescePendingQueueItems(pending: SyncQueueItem[]): Promise<CoalescedPendingQueue> {
+  if (pending.length <= 1) {
+    return { items: pending, droppedQueueIds: [] };
+  }
+
+  const seenWaypointStatus = new Set<number>();
+  const seenRouteReorder = new Set<number>();
+  const seenRouteState = new Set<number>();
+  const seenImportSignature = new Set<string>();
+  const deletedRoutes = new Set<number>();
+  const seenDeleteRoute = new Set<number>();
+  const preservedPhotoWaypointStatus = new Set<number>();
+  const latestWaypointStatusItemByWaypointId = new Map<number, SyncQueueItem>();
+  const waypointRouteCache = new Map<number, number | null>();
+
+  const keptFromTail: SyncQueueItem[] = [];
+  const droppedQueueIds: number[] = [];
+
+  for (let index = pending.length - 1; index >= 0; index -= 1) {
+    const item = pending[index];
+    const payload = item.payload ?? {};
+
+    if (item.opType === 'IMPORT_ROUTE_FILE') {
+      const originalRouteIds = extractImportRouteIds(payload);
+      const filteredRouteIds = originalRouteIds.filter((routeId) => !deletedRoutes.has(routeId));
+
+      if (originalRouteIds.length > 0 && filteredRouteIds.length === 0) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+
+      const normalizedRouteIds = filteredRouteIds.length > 0 ? filteredRouteIds : originalRouteIds;
+      const signature = buildImportRouteSignature(normalizedRouteIds, payload);
+      if (seenImportSignature.has(signature)) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+      seenImportSignature.add(signature);
+      keptFromTail.push(item);
+      continue;
+    }
+
+    if (item.opType === 'DELETE_ROUTE') {
+      const routeId = toQueueRouteId(payload);
+      if (routeId && seenDeleteRoute.has(routeId)) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+
+      if (routeId) {
+        seenDeleteRoute.add(routeId);
+        deletedRoutes.add(routeId);
+      }
+      keptFromTail.push(item);
+      continue;
+    }
+
+    if (item.opType === 'START_ROUTE' || item.opType === 'FINISH_ROUTE') {
+      const routeId = toQueueRouteId(payload);
+      if (routeId && deletedRoutes.has(routeId)) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+      if (routeId && seenRouteState.has(routeId)) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+      if (routeId) {
+        seenRouteState.add(routeId);
+      }
+      keptFromTail.push(item);
+      continue;
+    }
+
+    if (item.opType === 'REORDER_WAYPOINTS') {
+      const routeId = toQueueRouteId(payload);
+      if (routeId && deletedRoutes.has(routeId)) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+      if (routeId && seenRouteReorder.has(routeId)) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+      if (routeId) {
+        seenRouteReorder.add(routeId);
+      }
+      keptFromTail.push(item);
+      continue;
+    }
+
+    if (item.opType === 'UPDATE_WAYPOINT_STATUS') {
+      const waypointId = toQueueWaypointId(payload);
+      const routeId = await resolveRouteIdForWaypointMutation(item, waypointRouteCache);
+      if (routeId && deletedRoutes.has(routeId)) {
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+
+      if (waypointId && seenWaypointStatus.has(waypointId)) {
+        const latestItem = latestWaypointStatusItemByWaypointId.get(waypointId);
+        const shouldKeepPhotoSource =
+          !preservedPhotoWaypointStatus.has(waypointId) &&
+          hasWaypointPhotoMetadataInQueuePayload(payload) &&
+          !hasWaypointPhotoMetadataInQueuePayload(latestItem?.payload ?? {});
+
+        if (shouldKeepPhotoSource) {
+          preservedPhotoWaypointStatus.add(waypointId);
+          keptFromTail.push(item);
+          continue;
+        }
+
+        droppedQueueIds.push(item.id);
+        continue;
+      }
+      if (waypointId) {
+        seenWaypointStatus.add(waypointId);
+        latestWaypointStatusItemByWaypointId.set(waypointId, item);
+      }
+      keptFromTail.push(item);
+      continue;
+    }
+
+    keptFromTail.push(item);
+  }
+
+  return {
+    items: keptFromTail.reverse(),
+    droppedQueueIds
+  };
 }
 
 async function resolveQueueItemLockKeys(item: SyncQueueItem) {
@@ -2427,9 +2870,27 @@ async function processPendingQueue(): Promise<ProcessPendingQueueResult> {
     };
   }
 
+  const coalescedPending = await coalescePendingQueueItems(pending);
+  if (coalescedPending.droppedQueueIds.length > 0) {
+    for (const queueId of coalescedPending.droppedQueueIds) {
+      await markSyncOperationDone(queueId);
+    }
+  }
+
+  const effectivePending = coalescedPending.items;
+  if (effectivePending.length === 0) {
+    return {
+      processed: 0,
+      failed: false,
+      failedMessage: null as string | null,
+      pushedItems: [],
+      requiresRemoteOverwrite: false
+    };
+  }
+
   const deviceId = await getSyncDeviceId();
   const pendingWithLocks: PendingQueueItemWithLocks[] = [];
-  for (const [queueIndex, item] of pending.entries()) {
+  for (const [queueIndex, item] of effectivePending.entries()) {
     pendingWithLocks.push({
       item,
       lockKeys: await resolveQueueItemLockKeys(item),

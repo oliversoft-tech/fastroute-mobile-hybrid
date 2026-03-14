@@ -333,7 +333,7 @@ export function DeliveryScreen({ route, navigation }: Props) {
     try {
       setCameraBusy(true);
       const rawPhoto = await cameraRef.current.takePictureAsync({
-        quality: 0.6,
+        quality: 0.45,
         base64: false
       });
 
@@ -344,9 +344,9 @@ export function DeliveryScreen({ route, navigation }: Props) {
 
       const normalizedPhoto = await manipulateAsync(
         rawPhoto.uri,
-        [],
+        [{ resize: { width: 1280 } }],
         {
-          compress: 1,
+          compress: 0.42,
           format: SaveFormat.JPEG,
           base64: false
         }

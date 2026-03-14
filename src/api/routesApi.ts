@@ -2,6 +2,7 @@ import {
   canFinishRoute
 } from '@oliverbill/fastroute-domain';
 import * as FileSystem from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { RouteDetail, Waypoint, WaypointStatus } from './types';
 import {
   applyLocalWaypointReorder,
@@ -25,7 +26,7 @@ import {
   upsertLocalRoute
 } from '../offline/localDb';
 import { enrichWaypointsWithAddressData } from './supabaseDataApi';
-import { getRouteDetails as getRemoteRouteDetails } from './routesRemoteApi';
+import { getRouteDetails as getRemoteRouteDetails, getWaypointPhoto as getRemoteWaypointPhoto } from './routesRemoteApi';
 import { ensureE2ESeedData } from '../e2e/seedData';
 
 interface QueryCacheOptions {
@@ -142,6 +143,128 @@ function isWaypointDeliveredStatus(status: string | WaypointStatus | undefined) 
     .toUpperCase();
 
   return normalized.includes('ENTREGUE') || normalized.includes('CONCLUID');
+}
+
+function getPhotoExtensionFromMimeType(mimeType?: string) {
+  const normalized = String(mimeType ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (normalized.includes('png')) {
+    return 'png';
+  }
+  if (normalized.includes('webp')) {
+    return 'webp';
+  }
+  return 'jpg';
+}
+
+function sanitizeFileName(fileName: string, fallbackName: string) {
+  const trimmed = fileName.trim();
+  if (!trimmed) {
+    return fallbackName;
+  }
+  const sanitized = trimmed.replace(/[^\w.\-]+/g, '_');
+  return sanitized.length > 0 ? sanitized : fallbackName;
+}
+
+const SYNC_PHOTO_TARGET_MAX_BYTES = 320 * 1024;
+const SYNC_PHOTO_MAX_BASE64_CHARS = 520 * 1024;
+const SYNC_PHOTO_REENCODE_PROFILES = [
+  { width: 1280, compress: 0.42 },
+  { width: 1080, compress: 0.35 },
+  { width: 960, compress: 0.3 },
+  { width: 800, compress: 0.24 },
+  { width: 640, compress: 0.2 }
+];
+
+async function readLocalFileSizeBytes(fileUri: string) {
+  const info = await FileSystem.getInfoAsync(fileUri, { size: true });
+  if (info.exists && typeof info.size === 'number' && Number.isFinite(info.size) && info.size >= 0) {
+    return Math.trunc(info.size);
+  }
+  return null;
+}
+
+async function buildPhotoSyncPayload(imageUri: string) {
+  let workingUri = imageUri;
+  let workingSize = await readLocalFileSizeBytes(workingUri);
+
+  for (const profile of SYNC_PHOTO_REENCODE_PROFILES) {
+    if (typeof workingSize === 'number' && workingSize <= SYNC_PHOTO_TARGET_MAX_BYTES) {
+      break;
+    }
+
+    const manipulated = await manipulateAsync(
+      workingUri,
+      [{ resize: { width: profile.width } }],
+      {
+        compress: profile.compress,
+        format: SaveFormat.JPEG,
+        base64: false
+      }
+    );
+    workingUri = manipulated.uri;
+    workingSize = await readLocalFileSizeBytes(workingUri);
+  }
+
+  const imageBase64 = await FileSystem.readAsStringAsync(workingUri, {
+    encoding: FileSystem.EncodingType.Base64
+  });
+  if (!imageBase64 || imageBase64.trim().length === 0) {
+    throw new Error('Não foi possível preparar a foto para sincronização.');
+  }
+
+  if (imageBase64.length > SYNC_PHOTO_MAX_BASE64_CHARS) {
+    throw new Error(
+      'A foto ficou muito grande para sincronizar. Tire outra foto mais próxima ou com menos detalhes.'
+    );
+  }
+
+  const recomputedSize = await readLocalFileSizeBytes(workingUri);
+  return {
+    base64: imageBase64,
+    fileSizeBytes:
+      typeof recomputedSize === 'number'
+        ? recomputedSize
+        : Math.max(1, Math.trunc((imageBase64.length * 3) / 4))
+  };
+}
+
+async function persistRemoteWaypointPhotoLocally(
+  waypointId: number,
+  payload: Awaited<ReturnType<typeof getRemoteWaypointPhoto>>
+) {
+  if (!payload) {
+    return null;
+  }
+
+  const baseDirectory = FileSystem.documentDirectory;
+  if (!baseDirectory) {
+    return payload.kind === 'url' ? payload.url : null;
+  }
+
+  const photosDirectory = `${baseDirectory}delivery-photos`;
+  await FileSystem.makeDirectoryAsync(photosDirectory, { intermediates: true });
+
+  const extension = getPhotoExtensionFromMimeType(payload.kind === 'base64' ? payload.mimeType : payload.mimeType);
+  const fallbackFileName = `waypoint_${waypointId}_${Date.now()}.${extension}`;
+  const normalizedFileName = sanitizeFileName(payload.fileName, fallbackFileName);
+  const destinationUri = `${photosDirectory}/${normalizedFileName}`;
+
+  if (payload.kind === 'base64') {
+    await FileSystem.writeAsStringAsync(destinationUri, payload.base64, {
+      encoding: FileSystem.EncodingType.Base64
+    });
+    return destinationUri;
+  }
+
+  try {
+    await FileSystem.downloadAsync(payload.url, destinationUri);
+    return destinationUri;
+  } catch {
+    return payload.url;
+  }
 }
 
 function hasDetailedWaypointTitle(title: unknown) {
@@ -424,6 +547,18 @@ export async function updateWaypointStatus(
   const targetStatus = mapTargetStatusToDomain(status);
 
   const normalizedFileName = options?.file_name?.trim() || `entrega_${waypointId}.jpg`;
+  const queueOptions: Record<string, unknown> = {
+    ...(options ?? {}),
+    file_name: normalizedFileName
+  };
+
+  if (options?.image_uri) {
+    const imageUri = options.image_uri;
+    const preparedPhoto = await buildPhotoSyncPayload(imageUri);
+    queueOptions.image_base64 = preparedPhoto.base64;
+    queueOptions.image_mime_type = 'image/jpeg';
+    queueOptions.file_size_bytes = preparedPhoto.fileSizeBytes;
+  }
 
   const localStatus = mapDomainStatusToLocal(targetStatus);
   await updateLocalWaypointStatus(waypointId, localStatus);
@@ -435,10 +570,7 @@ export async function updateWaypointStatus(
     routeId,
     waypointId,
     status: targetStatus,
-    options: {
-      ...options,
-      file_name: normalizedFileName
-    }
+    options: queueOptions
   });
 }
 
@@ -689,7 +821,19 @@ export async function getWaypointDeliveryPhoto(
   if (!isWaypointDeliveredStatus(currentStatus)) {
     return null;
   }
-  return null;
+
+  const remotePhoto = await getRemoteWaypointPhoto(waypointId);
+  if (!remotePhoto) {
+    return null;
+  }
+
+  const persistedUri = await persistRemoteWaypointPhotoLocally(waypointId, remotePhoto);
+  if (!persistedUri) {
+    return null;
+  }
+
+  await upsertLocalWaypointPhotoUri(waypointId, persistedUri);
+  return persistedUri;
 }
 
 export async function getLastImportedRouteIds() {

@@ -25,6 +25,7 @@ const SETTINGS_KEY_LAST_SYNC_AT = 'last_sync_at';
 const SETTINGS_KEY_LAST_DAILY_SYNC_DATE = 'last_daily_sync_date';
 const SETTINGS_KEY_INITIAL_SYNC_DONE = 'initial_sync_done';
 const SETTINGS_KEY_LAST_IMPORTED_ROUTE_IDS = 'last_imported_route_ids';
+const SETTINGS_KEY_CURRENT_DRIVER_ID = 'current_driver_id';
 
 let dbPromise: Promise<SQLiteDatabase> | null = null;
 let schemaReady = false;
@@ -54,6 +55,7 @@ type WaypointRow = {
   subtitle: string | null;
   latitude: number | null;
   longitude: number | null;
+  updated_at?: string | null;
 };
 
 type QueueRow = {
@@ -118,6 +120,38 @@ function toPositiveInt(value: unknown, fallback = 0) {
     return fallback;
   }
   return n;
+}
+
+function trimNonEmptyString(value: unknown) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeWaypointTitle(value: string) {
+  return value
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+}
+
+function hasDetailedWaypointTitle(title: unknown) {
+  const normalized = trimNonEmptyString(title);
+  if (!normalized) {
+    return false;
+  }
+
+  const key = normalizeWaypointTitle(normalized);
+  if (key === 'ENDERECO NAO INFORMADO') {
+    return false;
+  }
+  if (/^ENDERECO\s+\d+$/.test(key) || /^WAYPOINT\s*#?\s*\d+$/.test(key)) {
+    return false;
+  }
+  return true;
 }
 
 function parsePayload(value: string) {
@@ -347,6 +381,16 @@ export async function mergeRouteSnapshot(routes: RouteDetail[]) {
     for (const route of routes) {
       const routeWaypoints = route.waypoints ?? [];
       const reportedCount = route.waypoints_count ?? routeWaypoints.length;
+      const existingWaypoints = await db.getAllAsync<WaypointRow>(
+        `SELECT
+           id, route_id, address_id, user_id, seq_order, status, title, subtitle, latitude, longitude
+         FROM waypoints
+         WHERE route_id = ?`,
+        route.id
+      );
+      const existingWaypointsById = new Map<number, WaypointRow>(
+        existingWaypoints.map((waypoint) => [waypoint.id, waypoint])
+      );
 
       await db.runAsync(
         `INSERT INTO routes (id, cluster_id, status, created_at, waypoints_count, updated_at)
@@ -369,37 +413,65 @@ export async function mergeRouteSnapshot(routes: RouteDetail[]) {
       );
 
       for (const waypoint of routeWaypoints) {
+        const existing = existingWaypointsById.get(waypoint.id);
+        const incomingAddressId = toPositiveInt(waypoint.address_id, 0);
+        const existingAddressId = toPositiveInt(existing?.address_id, 0);
+        const incomingSeqOrder = toPositiveInt(waypoint.seq_order, 0);
+        const existingSeqOrder = toPositiveInt(existing?.seq_order, 0);
+        const incomingTitle = trimNonEmptyString(waypoint.title);
+        const existingTitle = trimNonEmptyString(existing?.title);
+        const incomingSubtitle = trimNonEmptyString(waypoint.subtitle);
+        const existingSubtitle = trimNonEmptyString(existing?.subtitle);
+        const incomingHasDetailedTitle = hasDetailedWaypointTitle(incomingTitle);
+        const existingHasDetailedTitle = hasDetailedWaypointTitle(existingTitle);
+
+        let mergedTitle = incomingTitle ?? existingTitle;
+        if (!incomingHasDetailedTitle && existingHasDetailedTitle) {
+          mergedTitle = existingTitle;
+        }
+        if (incomingHasDetailedTitle) {
+          mergedTitle = incomingTitle;
+        }
+
+        const mergedSubtitle = incomingSubtitle ?? existingSubtitle;
+        const mergedLatitude =
+          typeof waypoint.latitude === 'number'
+            ? waypoint.latitude
+            : typeof existing?.latitude === 'number'
+              ? existing.latitude
+              : null;
+        const mergedLongitude =
+          typeof waypoint.longitude === 'number'
+            ? waypoint.longitude
+            : typeof existing?.longitude === 'number'
+              ? existing.longitude
+              : null;
+
         await db.runAsync(
           `INSERT INTO waypoints (
             id, route_id, address_id, user_id, seq_order, status, title, subtitle, latitude, longitude, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             route_id = excluded.route_id,
-            address_id = CASE
-              WHEN excluded.address_id IS NULL OR excluded.address_id <= 0 THEN waypoints.address_id
-              ELSE excluded.address_id
-            END,
-            user_id = COALESCE(excluded.user_id, waypoints.user_id),
-            seq_order = CASE
-              WHEN excluded.seq_order IS NULL OR excluded.seq_order <= 0 THEN waypoints.seq_order
-              ELSE excluded.seq_order
-            END,
+            address_id = excluded.address_id,
+            user_id = excluded.user_id,
+            seq_order = excluded.seq_order,
             status = excluded.status,
-            title = COALESCE(NULLIF(TRIM(excluded.title), ''), waypoints.title),
-            subtitle = COALESCE(NULLIF(TRIM(excluded.subtitle), ''), waypoints.subtitle),
-            latitude = COALESCE(excluded.latitude, waypoints.latitude),
-            longitude = COALESCE(excluded.longitude, waypoints.longitude),
+            title = excluded.title,
+            subtitle = excluded.subtitle,
+            latitude = excluded.latitude,
+            longitude = excluded.longitude,
             updated_at = excluded.updated_at`,
           waypoint.id,
           waypoint.route_id || route.id,
-          waypoint.address_id ?? null,
-          waypoint.user_id ?? null,
-          waypoint.seq_order ?? 0,
+          incomingAddressId > 0 ? incomingAddressId : existingAddressId > 0 ? existingAddressId : null,
+          waypoint.user_id ?? existing?.user_id ?? null,
+          incomingSeqOrder > 0 ? incomingSeqOrder : existingSeqOrder > 0 ? existingSeqOrder : 0,
           waypoint.status,
-          waypoint.title ?? null,
-          waypoint.subtitle ?? null,
-          waypoint.latitude ?? null,
-          waypoint.longitude ?? null,
+          mergedTitle,
+          mergedSubtitle,
+          mergedLatitude,
+          mergedLongitude,
           timestamp
         );
       }
@@ -472,7 +544,7 @@ export async function listLocalWaypoints(routeId: number): Promise<Waypoint[]> {
   return rows.map((row, index) => ({
     id: row.id,
     route_id: row.route_id,
-    address_id: toPositiveInt(row.address_id, row.id),
+    address_id: toPositiveInt(row.address_id, 0),
     user_id: row.user_id ?? undefined,
     seq_order: toPositiveInt(row.seq_order, index + 1),
     status: normalizeWaypointStatus(row.status),
@@ -485,41 +557,107 @@ export async function listLocalWaypoints(routeId: number): Promise<Waypoint[]> {
 
 export async function backfillLocalWaypointTitlesByAddress(routeId: number) {
   const db = await getLocalDb();
-  const now = new Date().toISOString();
-  await db.runAsync(
-    `UPDATE waypoints
-     SET title = COALESCE(
-           NULLIF(TRIM(title), ''),
-           (
-             SELECT source.title
-             FROM waypoints AS source
-             WHERE source.address_id = waypoints.address_id
-               AND source.id <> waypoints.id
-               AND source.title IS NOT NULL
-               AND TRIM(source.title) <> ''
-             ORDER BY datetime(source.updated_at) DESC, source.id DESC
-             LIMIT 1
-           )
-         ),
-         subtitle = COALESCE(
-           NULLIF(TRIM(subtitle), ''),
-           (
-             SELECT source.subtitle
-             FROM waypoints AS source
-             WHERE source.address_id = waypoints.address_id
-               AND source.id <> waypoints.id
-               AND source.subtitle IS NOT NULL
-               AND TRIM(source.subtitle) <> ''
-             ORDER BY datetime(source.updated_at) DESC, source.id DESC
-             LIMIT 1
-           )
-         ),
-         updated_at = ?
-     WHERE route_id = ?
-       AND (title IS NULL OR TRIM(title) = '')`,
-    now,
+  const routeWaypoints = await db.getAllAsync<WaypointRow>(
+    `SELECT id, address_id, title, subtitle, updated_at
+     FROM waypoints
+     WHERE route_id = ?`,
     routeId
   );
+
+  const waypointsNeedingTitle = routeWaypoints.filter((waypoint) => !hasDetailedWaypointTitle(waypoint.title));
+  if (waypointsNeedingTitle.length === 0) {
+    return;
+  }
+
+  const addressIds = [...new Set(
+    waypointsNeedingTitle
+      .map((waypoint) => Math.trunc(Number(waypoint.address_id)))
+      .filter((addressId) => Number.isFinite(addressId) && addressId > 0)
+  )];
+
+  if (addressIds.length === 0) {
+    return;
+  }
+
+  const placeholders = addressIds.map(() => '?').join(', ');
+  const sourceRows = await db.getAllAsync<WaypointRow>(
+    `SELECT id, address_id, title, subtitle, updated_at
+     FROM waypoints
+     WHERE address_id IN (${placeholders})`,
+    ...addressIds
+  );
+
+  const bestTitleByAddressId = new Map<number, WaypointRow>();
+  for (const row of sourceRows) {
+    const addressId = Math.trunc(Number(row.address_id));
+    if (!Number.isFinite(addressId) || addressId <= 0 || !hasDetailedWaypointTitle(row.title)) {
+      continue;
+    }
+
+    const currentBest = bestTitleByAddressId.get(addressId);
+    if (!currentBest) {
+      bestTitleByAddressId.set(addressId, row);
+      continue;
+    }
+
+    const currentDate = Date.parse(currentBest.updated_at ?? '');
+    const nextDate = Date.parse(row.updated_at ?? '');
+    const currentTs = Number.isFinite(currentDate) ? currentDate : -1;
+    const nextTs = Number.isFinite(nextDate) ? nextDate : -1;
+    if (nextTs > currentTs || (nextTs === currentTs && row.id > currentBest.id)) {
+      bestTitleByAddressId.set(addressId, row);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const updates = waypointsNeedingTitle
+    .map((waypoint) => {
+      const addressId = Math.trunc(Number(waypoint.address_id));
+      if (!Number.isFinite(addressId) || addressId <= 0) {
+        return null;
+      }
+
+      const source = bestTitleByAddressId.get(addressId);
+      const sourceTitle = trimNonEmptyString(source?.title);
+      if (!sourceTitle) {
+        return null;
+      }
+
+      return {
+        id: waypoint.id,
+        title: sourceTitle,
+        subtitle: trimNonEmptyString(waypoint.subtitle) ?? trimNonEmptyString(source?.subtitle),
+      };
+    })
+    .filter(
+      (
+        update
+      ): update is {
+        id: number;
+        title: string;
+        subtitle: string | null;
+      } => Boolean(update)
+    );
+
+  if (updates.length === 0) {
+    return;
+  }
+
+  await db.withTransactionAsync(async () => {
+    for (const update of updates) {
+      await db.runAsync(
+        `UPDATE waypoints
+         SET title = ?,
+             subtitle = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        update.title,
+        update.subtitle,
+        now,
+        update.id
+      );
+    }
+  });
 }
 
 export async function getLocalWaypoint(waypointId: number): Promise<Waypoint | null> {
@@ -539,7 +677,7 @@ export async function getLocalWaypoint(waypointId: number): Promise<Waypoint | n
   return {
     id: row.id,
     route_id: row.route_id,
-    address_id: toPositiveInt(row.address_id, row.id),
+    address_id: toPositiveInt(row.address_id, 0),
     user_id: row.user_id ?? undefined,
     seq_order: toPositiveInt(row.seq_order, 1),
     status: normalizeWaypointStatus(row.status),
@@ -589,7 +727,7 @@ export async function replaceLocalRouteWaypoints(routeId: number, waypoints: Way
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         waypoint.id,
         routeId,
-        waypoint.address_id ?? waypoint.id,
+        toPositiveInt(waypoint.address_id, 0) || null,
         waypoint.user_id ?? null,
         waypoint.seq_order ?? 0,
         waypoint.status,
@@ -754,6 +892,50 @@ export async function updatePendingImportRouteIds(previousRouteIds: number[], ne
   return false;
 }
 
+export async function backfillPendingImportDriverId(driverId: number) {
+  const normalizedDriverId = Math.trunc(Number(driverId));
+  if (!Number.isFinite(normalizedDriverId) || normalizedDriverId <= 0) {
+    return 0;
+  }
+
+  const db = await getLocalDb();
+  const rows = await db.getAllAsync<{ id: number; payload: string }>(
+    `SELECT id, payload
+     FROM sync_queue
+     WHERE op_type = 'IMPORT_ROUTE_FILE'
+     ORDER BY id ASC`
+  );
+
+  let updatedCount = 0;
+  for (const row of rows) {
+    const payload = parsePayload(row.payload);
+    const payloadDriverId = toPositiveInt(
+      payload.driver_id ?? payload.driverId ?? payload.user_id ?? payload.userId,
+      0
+    );
+    if (payloadDriverId > 0) {
+      continue;
+    }
+
+    const nextPayload: Record<string, unknown> = {
+      ...payload,
+      driver_id: normalizedDriverId,
+      user_id: normalizedDriverId
+    };
+
+    await db.runAsync(
+      `UPDATE sync_queue
+       SET payload = ?, last_error = NULL
+       WHERE id = ?`,
+      JSON.stringify(nextPayload),
+      row.id
+    );
+    updatedCount += 1;
+  }
+
+  return updatedCount;
+}
+
 export async function listPendingSyncOperations(limit = 100): Promise<SyncQueueItem[]> {
   const db = await getLocalDb();
   const rows = await db.getAllAsync<QueueRow>(
@@ -895,4 +1077,22 @@ export async function removeLastImportedRouteId(routeId: number) {
   }
 
   await setLastImportedRouteIds(nextRouteIds);
+}
+
+export async function getCurrentDriverId() {
+  const value = await getAppSetting(SETTINGS_KEY_CURRENT_DRIVER_ID);
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+export async function setCurrentDriverId(driverId: number | null) {
+  const parsed = Math.trunc(Number(driverId));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    await setAppSetting(SETTINGS_KEY_CURRENT_DRIVER_ID, '');
+    return;
+  }
+  await setAppSetting(SETTINGS_KEY_CURRENT_DRIVER_ID, String(parsed));
 }

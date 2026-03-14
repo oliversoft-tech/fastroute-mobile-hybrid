@@ -213,6 +213,7 @@ export function ImportRoutesScreen({ navigation, route }: Props) {
           onPress={onClearImport}
           disabled={clearingImport || importedRouteIds.length === 0}
           loading={clearingImport}
+          style={styles.createActionButton}
         />
       </View>
 
@@ -369,7 +370,11 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 14
+    padding: 14,
+    gap: 10
+  },
+  createActionButton: {
+    width: '100%'
   },
   loaderContainer: {
     paddingVertical: 24,

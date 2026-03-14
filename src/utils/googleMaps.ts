@@ -10,9 +10,7 @@ function buildCoordinatePairs(waypoints: Waypoint[]) {
   });
 }
 
-export function buildGoogleMapsDirectionsUrl(waypoints: Waypoint[]) {
-  const coordinates = buildCoordinatePairs(waypoints);
-
+function buildGoogleMapsDirectionsQueryUrl(coordinates: string[]) {
   if (coordinates.length === 0) {
     return null;
   }
@@ -38,6 +36,24 @@ export function buildGoogleMapsDirectionsUrl(waypoints: Waypoint[]) {
   return `https://www.google.com/maps/dir/?${params.join('&')}`;
 }
 
+function buildGoogleMapsDirectionsPathUrl(coordinates: string[]) {
+  if (coordinates.length === 0) {
+    return null;
+  }
+
+  if (coordinates.length === 1) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates[0])}`;
+  }
+
+  const encodedPath = coordinates.map((coordinate) => encodeURIComponent(coordinate)).join('/');
+  return `https://www.google.com/maps/dir/${encodedPath}/`;
+}
+
+export function buildGoogleMapsDirectionsUrl(waypoints: Waypoint[]) {
+  const coordinates = buildCoordinatePairs(waypoints);
+  return buildGoogleMapsDirectionsPathUrl(coordinates);
+}
+
 function buildGoogleMapsAppUrl(waypoints: Waypoint[]) {
   const coordinates = buildCoordinatePairs(waypoints);
   if (coordinates.length === 0) {
@@ -49,38 +65,35 @@ function buildGoogleMapsAppUrl(waypoints: Waypoint[]) {
   }
 
   const origin = coordinates[0];
-  const destination = coordinates[coordinates.length - 1];
-  const waypointList = coordinates.slice(1, -1);
+  const destinationChain = coordinates.slice(1).join('+to:');
   const params = [
     `saddr=${encodeURIComponent(origin)}`,
-    `daddr=${encodeURIComponent(destination)}`,
+    `daddr=${encodeURIComponent(destinationChain)}`,
     'directionsmode=driving'
   ];
-
-  if (waypointList.length > 0) {
-    params.push(`waypoints=${encodeURIComponent(waypointList.join('|'))}`);
-  }
 
   return `comgooglemaps://?${params.join('&')}`;
 }
 
 export async function openGoogleMapsRoute(waypoints: Waypoint[]) {
-  const webUrl = buildGoogleMapsDirectionsUrl(waypoints);
-  if (!webUrl) {
+  const coordinates = buildCoordinatePairs(waypoints);
+  const webPathUrl = buildGoogleMapsDirectionsPathUrl(coordinates);
+  const webQueryUrl = buildGoogleMapsDirectionsQueryUrl(coordinates);
+  if (!webPathUrl && !webQueryUrl) {
     return false;
   }
 
   if (Platform.OS === 'web') {
     const browser = globalThis as { location?: { assign?: (url: string) => void } };
     if (browser.location?.assign) {
-      browser.location.assign(webUrl);
+      browser.location.assign(webPathUrl ?? webQueryUrl ?? '');
       return true;
     }
     return false;
   }
 
   const appUrl = buildGoogleMapsAppUrl(waypoints);
-  const candidates = [appUrl, webUrl].filter((url): url is string => Boolean(url));
+  const candidates = [appUrl, webPathUrl, webQueryUrl].filter((url): url is string => Boolean(url));
 
   for (const candidate of candidates) {
     try {

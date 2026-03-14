@@ -9,6 +9,7 @@ import { ImportResult, Waypoint } from './types';
 import {
   enqueueSyncOperation,
   getAppSetting,
+  setCurrentDriverId,
   getLocalDb,
   replaceLocalRouteWaypoints,
   setAppSetting,
@@ -561,6 +562,7 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
   if (!driverId || driverId <= 0) {
     throw new Error('Não foi possível resolver o motorista da sessão (driver_id). Faça login novamente e tente importar.');
   }
+  await setCurrentDriverId(driverId);
 
   for (const [clusterIndex, clusterEntry] of clusterEntries.entries()) {
     const routeId = nextRouteId;
@@ -583,6 +585,7 @@ export async function importOrders(file: LocalFile): Promise<ImportResult> {
         id: nextWaypointId,
         route_id: routeId,
         address_id: waypoint.address_id,
+        user_id: driverId,
         seq_order: waypoint.seq_order,
         status: 'PENDENTE',
         title: metadata?.title,

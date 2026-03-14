@@ -9,6 +9,10 @@ type RouteWaypointRow = {
   seq_order: number;
   status: string | null;
 };
+type RouteWaypointAddressRow = {
+  id: number;
+  address_id: number | null;
+};
 
 type AddressRow = {
   id: number;
@@ -134,6 +138,34 @@ async function loadAddressesByIds(addressIds: number[]) {
   }
 
   return addressMap;
+}
+
+async function loadRouteWaypointAddressByIds(waypointIds: number[]) {
+  if (waypointIds.length === 0) {
+    return new Map<number, number>();
+  }
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('route_waypoints')
+    .select('id, address_id')
+    .in('id', waypointIds);
+
+  if (error) {
+    throw error;
+  }
+
+  const mapping = new Map<number, number>();
+  for (const row of (data ?? []) as RouteWaypointAddressRow[]) {
+    const waypointId = Number(row.id);
+    const addressId = Number(row.address_id);
+    if (!Number.isFinite(waypointId) || waypointId <= 0 || !Number.isFinite(addressId) || addressId <= 0) {
+      continue;
+    }
+    mapping.set(Math.trunc(waypointId), Math.trunc(addressId));
+  }
+
+  return mapping;
 }
 
 export async function listRouteWaypointsFromSupabase(routeId: number): Promise<Waypoint[]> {
@@ -340,19 +372,50 @@ export async function getLatestImportFileLayoutColumnNames() {
 }
 
 export async function enrichWaypointsWithAddressData(waypoints: Waypoint[]): Promise<Waypoint[]> {
-  const normalizedWaypoints = waypoints.filter(
-    (waypoint) => Number.isFinite(Number(waypoint.id)) && Number.isFinite(Number(waypoint.address_id))
-  );
-
+  const normalizedWaypoints = waypoints.filter((waypoint) => Number.isFinite(Number(waypoint.id)));
   if (normalizedWaypoints.length === 0) {
     return waypoints;
   }
 
-  const addressIds = [...new Set(normalizedWaypoints.map((waypoint) => Number(waypoint.address_id)))];
+  const waypointsMissingAddressId = normalizedWaypoints.filter((waypoint) => {
+    const addressId = Number(waypoint.address_id);
+    return !Number.isFinite(addressId) || addressId <= 0;
+  });
+
+  let recoveredAddressIdByWaypointId = new Map<number, number>();
+  if (waypointsMissingAddressId.length > 0) {
+    const missingWaypointIds = [
+      ...new Set(
+        waypointsMissingAddressId
+          .map((waypoint) => Math.trunc(Number(waypoint.id)))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )
+    ];
+    recoveredAddressIdByWaypointId = await loadRouteWaypointAddressByIds(missingWaypointIds);
+  }
+
+  const addressIds = [...new Set(
+    normalizedWaypoints
+      .map((waypoint) => {
+        const currentAddressId = Number(waypoint.address_id);
+        if (Number.isFinite(currentAddressId) && currentAddressId > 0) {
+          return Math.trunc(currentAddressId);
+        }
+        const recovered = recoveredAddressIdByWaypointId.get(Math.trunc(Number(waypoint.id)));
+        return Number.isFinite(recovered) ? Math.trunc(Number(recovered)) : 0;
+      })
+      .filter((addressId) => Number.isFinite(addressId) && addressId > 0)
+  )];
   const addressMap = await loadAddressesByIds(addressIds);
 
   return waypoints.map((waypoint) => {
-    const address = addressMap.get(Number(waypoint.address_id));
+    const currentAddressId = Number(waypoint.address_id);
+    const normalizedWaypointId = Math.trunc(Number(waypoint.id));
+    const resolvedAddressId =
+      Number.isFinite(currentAddressId) && currentAddressId > 0
+        ? Math.trunc(currentAddressId)
+        : recoveredAddressIdByWaypointId.get(normalizedWaypointId);
+    const address = resolvedAddressId ? addressMap.get(resolvedAddressId) : undefined;
     if (!address) {
       return waypoint;
     }
@@ -370,6 +433,7 @@ export async function enrichWaypointsWithAddressData(waypoints: Waypoint[]): Pro
 
     return {
       ...waypoint,
+      address_id: resolvedAddressId ?? waypoint.address_id,
       title: hasValidTitle ? waypoint.title : buildAddressTitle(address),
       subtitle: waypoint.subtitle?.trim()?.length ? waypoint.subtitle : buildAddressSubtitle(address),
       latitude: typeof waypoint.latitude === 'number' ? waypoint.latitude : toNumber(address.lat),
